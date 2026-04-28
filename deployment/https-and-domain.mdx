@@ -1,0 +1,148 @@
+---
+title: "HTTPS and Domain Configuration for CubeSandbox"
+description: "Configure TLS certificates and DNS for CubeSandbox sandbox domains, including wildcard DNS, mkcert, custom certificates, and the e2b-dev-sidecar alternative."
+---
+
+CubeSandbox generates a unique domain for every running sandbox so that the E2B SDK can reach services inside it. This page explains how those domains are structured, how the built-in CoreDNS covers local use, and how to configure a custom domain with TLS for production deployments.
+
+<Note>
+TLS configuration only affects how clients reach CubeProxy. `E2B_API_URL` always points to the Cube API Server (default port `3000`) — a separate component from CubeProxy.
+</Note>
+
+## How sandbox domains work
+
+When an E2B client accesses a sandbox, the domain is dynamically generated using the following format:
+
+```
+<sandbox-service-port>-<sandboxId>.<domain>
+```
+
+For example:
+
+```
+49983-1aa1fae8fb364edaa8203a7481995b4d.cube.app
+```
+
+Where:
+
+| Part | Description |
+|---|---|
+| `sandbox-service-port` | The port the sandbox application listens on (e.g. `49983`) |
+| `sandboxId` | The unique sandbox ID |
+| `domain` | The base domain, defaults to `cube.app` |
+
+Because `sandboxId` changes for every sandbox, the network environment where the E2B client runs must support **wildcard DNS resolution** — `*.<domain>` must resolve to the IP of the machine running CubeProxy.
+
+## Built-in CoreDNS (quick start)
+
+The one-click install script starts a **CoreDNS** service on the installation node that automatically handles wildcard resolution for `*.cube.app`. This lets you run the full workflow on a single machine without any additional DNS setup.
+
+<Warning>
+The built-in CoreDNS is intended for local and quick-start use only. It is not suitable for production or multi-machine shared deployments.
+</Warning>
+
+## Production: custom domain and DNS
+
+For production deployments, use your own domain and configure a wildcard DNS record pointing to the CubeProxy IP:
+
+```
+*.your.domain.com  →  <IP of the node running CubeProxy>
+```
+
+Then tell the Cube API Server to use that domain at startup:
+
+<Tabs>
+  <Tab title="CLI flag">
+    ```bash
+    ./cube-api --sandbox-domain your.domain.com
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    export CUBE_API_SANDBOX_DOMAIN=your.domain.com
+    ./cube-api
+    ```
+  </Tab>
+  <Tab title=".env file">
+    ```bash
+    CUBE_API_SANDBOX_DOMAIN=your.domain.com
+    ```
+  </Tab>
+</Tabs>
+
+With this in place, the `domain` field in API responses returns `your.domain.com`, allowing the E2B SDK to construct correct sandbox access URLs.
+
+## HTTPS certificate options
+
+CubeProxy serves both HTTPS (port 443) and HTTP (port 80) out of the box. The E2B SDK uses HTTPS by default. The one-click install pre-installs a `cube.app` test certificate so you can try HTTPS immediately.
+
+For custom domains or production traffic, choose one of the options below.
+
+### Option A — mkcert (local development)
+
+`mkcert` generates a locally-trusted certificate for a custom hostname in seconds:
+
+```bash
+mkcert -install
+mkcert <your-host-ip-or-domain>
+```
+
+Set `SSL_CERT_FILE` so the E2B SDK trusts the generated CA:
+
+```bash
+export SSL_CERT_FILE=/root/.local/share/mkcert/rootCA.pem
+```
+
+<Warning>
+mkcert certificates are only trusted on machines where `mkcert -install` has been run. Do not use this approach for production or shared deployments.
+</Warning>
+
+### Option B — your own certificate (production)
+
+Edit CubeProxy's `nginx.conf` to reference your certificate and private key:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your.domain.com;
+
+    ssl_certificate     /path/to/your/cert.pem;
+    ssl_certificate_key /path/to/your/key.pem;
+}
+```
+
+Also pass `--sandbox-domain` to the Cube API Server so it publishes the correct domain in API responses (see the [Production: custom domain and DNS](#production-custom-domain-and-dns) section above).
+
+### Option C — HTTPS-only (disable HTTP)
+
+By default, CubeProxy listens on both HTTP and HTTPS. To disable the HTTP port entirely, remove the HTTP server block from CubeProxy's `nginx.conf` and drop the corresponding port mapping in `docker-compose.yaml`.
+
+<Tip>
+The E2B SDK only uses HTTPS, so disabling HTTP has no impact on SDK-based clients.
+</Tip>
+
+## Dev-only alternative: e2b-dev-sidecar
+
+If you are experimenting with CubeSandbox in a local development environment and want to skip both wildcard DNS setup and self-signed certificate trust, the **e2b-dev-sidecar** is the simplest option.
+
+It starts a lightweight local proxy that intercepts E2B SDK data-plane requests and rewrites the `Host` header before forwarding them to CubeProxy. This means:
+
+- **No wildcard DNS needed** — no `*.cube.app` record required on the developer machine
+- **No certificate trust needed** — the sidecar skips server certificate verification by default (`CUBE_REMOTE_PROXY_VERIFY_SSL=false`)
+
+See the [e2b-dev-sidecar example](https://github.com/tencentcloud/CubeSandbox/tree/master/examples/e2b-dev-sidecar) in the repository.
+
+<Warning>
+e2b-dev-sidecar is a minimal development-only implementation and is not intended for production use.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/deployment/authentication">
+    Enable API key authentication for your deployment.
+  </Card>
+  <Card title="Single-node deployment" icon="server" href="/deployment/single-node">
+    Review single-node setup and configuration options.
+  </Card>
+</CardGroup>

@@ -1,0 +1,63 @@
+---
+title: "GET /health — CubeAPI Liveness Check and Status API"
+description: "Check whether CubeAPI is reachable and retrieve the count of running sandboxes. No authentication required — this endpoint is always publicly accessible."
+---
+
+The health endpoint provides a lightweight liveness signal for CubeAPI. It returns the service status string and the current count of running sandboxes. This endpoint is exempt from authentication — it always responds even when `--auth-callback-url` is configured on the server.
+
+## Endpoint
+
+```
+GET /cubeapi/v1/health
+```
+
+## Authentication
+
+None required. This endpoint is always publicly accessible.
+
+## Request parameters
+
+This endpoint takes no path parameters, query parameters, or request body.
+
+## Response
+
+**HTTP 200** — Service is healthy.
+
+<ResponseField name="status" type="string" required>
+  A string indicating the current service status. Typically `"ok"` when the server is healthy and accepting requests.
+</ResponseField>
+
+<ResponseField name="sandboxes" type="integer" required>
+  The number of sandboxes currently running on this CubeAPI instance. Useful for quick capacity checks without querying the full sandbox list.
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "status": "ok",
+  "sandboxes": 12
+}
+```
+
+## Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/health
+```
+
+```python Python (requests)
+import requests
+
+response = requests.get("http://localhost:3000/cubeapi/v1/health")
+data = response.json()
+print(f"Status: {data['status']}, Sandboxes: {data['sandboxes']}")
+```
+
+</CodeGroup>
+
+<Note>
+  The `sandboxes` field reflects the count known to this CubeAPI node. In a multi-node deployment, each CubeAPI instance reports its own view. Use `GET /cubeapi/v1/cluster/overview` to obtain cluster-wide capacity data.
+</Note>

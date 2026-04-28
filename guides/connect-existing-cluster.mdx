@@ -1,0 +1,139 @@
+---
+title: 'Connect Your Local Machine to a CubeSandbox Cluster'
+description: 'Use e2b-dev-sidecar to connect a local machine to a CubeSandbox cluster without configuring wildcard DNS or trusting self-signed certificates.'
+---
+
+The E2B SDK resolves sandbox addresses through wildcard DNS — requests for `*.cube.app` must point to your cluster's IP. In production that is straightforward, but setting up wildcard DNS on a developer laptop is tedious. `e2b-dev-sidecar` is a lightweight local proxy that intercepts SDK requests, rewrites `Host` headers, and forwards traffic to the correct CubeAPI and CubeProxy endpoints — all without touching your DNS configuration.
+
+## Why dev-sidecar exists
+
+When the E2B SDK creates or connects to a sandbox, it sends requests to subdomains like `<sandbox-id>.cube.app`. In a production deployment those names resolve to the cluster IP through a wildcard DNS record:
+
+```text
+*.cube.app → <cube-master-node-ip>
+```
+
+During local development, adding such a record is inconvenient. `e2b-dev-sidecar` intercepts those requests on `localhost` and rewrites the `Host` header before proxying to the real cluster endpoint, so the SDK works unchanged without any DNS setup.
+
+<Note>
+  For production deployments, use real wildcard DNS and a valid TLS certificate instead of dev-sidecar. The sidecar is designed for local development convenience only.
+</Note>
+
+## Quick start
+
+<Steps>
+  <Step title="Clone and enter the example directory">
+    The sidecar example lives inside the CubeSandbox repository:
+
+    ```bash
+    cd examples/e2b-dev-sidecar
+    pip install -r requirements.txt
+    ```
+  </Step>
+
+  <Step title="Copy the environment file">
+    ```bash
+    cp env.example .env
+    ```
+
+    The defaults in `env.example` are pre-configured for a locally started Cube environment (via `dev-env`). If you are connecting to a remote cluster, see [Case 2](#case-2-connecting-to-a-remote-cluster) below before running this step.
+  </Step>
+
+  <Step title="Set your template ID and run">
+    The only value you must fill in for a local `dev-env` setup is `CUBE_TEMPLATE_ID`:
+
+    ```bash
+    E2B_API_URL="http://127.0.0.1:13000"
+    CUBE_REMOTE_PROXY_BASE="https://127.0.0.1:11443"
+    E2B_API_KEY="dummy"
+    CUBE_TEMPLATE_ID="<your-template-id>"
+    ```
+
+    Then run the demo:
+
+    ```bash
+    python demo.py
+    ```
+  </Step>
+
+  <Step title="Use the E2B SDK normally">
+    Once the sidecar is running, point the E2B SDK at the sidecar's local address by setting `E2B_API_URL`. The SDK requires no other changes — all requests are transparently forwarded to the cluster.
+  </Step>
+</Steps>
+
+## Two connection scenarios
+
+<Tabs>
+  <Tab title="Case 1: Local dev-env">
+    If you started Cube locally using `dev-env`, the default values in `env.example` are already correct. The `dev-env` setup exposes fixed host ports:
+
+    | Variable | Default value | What it points to |
+    |---|---|---|
+    | `E2B_API_URL` | `http://127.0.0.1:13000` | CubeAPI, forwarded from guest port 3000 |
+    | `CUBE_REMOTE_PROXY_BASE` | `https://127.0.0.1:11443` | CubeProxy, forwarded from guest port 443 |
+    | `E2B_API_KEY` | `dummy` | Satisfies SDK check; replace if auth is enabled |
+    | `CUBE_TEMPLATE_ID` | *(must set)* | Template ID from your Cube deployment |
+
+    <Tip>
+      If you followed the Development Environment (QEMU VM) setup guide, these ports are already mapped. You typically only need to fill in `CUBE_TEMPLATE_ID`.
+    </Tip>
+  </Tab>
+
+  <Tab title="Case 2: Remote cluster">
+    To connect to a Cube cluster running on another machine, replace the default addresses with the real endpoints of that cluster:
+
+    ```bash
+    E2B_API_URL="http://<node-ip>:3000"
+    CUBE_REMOTE_PROXY_BASE="https://<node-ip>:443"
+    E2B_API_KEY="dummy"
+    CUBE_TEMPLATE_ID="<your-template-id>"
+    ```
+
+    Then run the same command:
+
+    ```bash
+    python demo.py
+    ```
+
+    <Note>
+      If your cluster uses a self-signed certificate, set `CUBE_REMOTE_PROXY_VERIFY_SSL="false"` to disable TLS verification for the proxy connection.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Environment variable reference
+
+These four variables are sufficient for most development flows:
+
+| Variable | Description |
+|---|---|
+| `E2B_API_URL` | Control-plane endpoint. Points to CubeAPI. Default for `dev-env`: `http://127.0.0.1:13000`. |
+| `CUBE_REMOTE_PROXY_BASE` | Data-plane endpoint. Points to CubeProxy. Default for `dev-env`: `https://127.0.0.1:11443`. |
+| `E2B_API_KEY` | Must be non-empty for the SDK. Use `dummy` for local dev-env; supply the real key if cluster auth is enabled. |
+| `CUBE_TEMPLATE_ID` | The template ID used when creating sandboxes. Obtain this from `cubemastercli tpl watch`. |
+
+Additional optional variables from `env.example`:
+
+| Variable | Description |
+|---|---|
+| `CUBE_REMOTE_SANDBOX_DOMAIN` | Sandbox domain expected by CubeProxy. Defaults to `cube.app`. |
+| `CUBE_REMOTE_PROXY_VERIFY_SSL` | Set to `false` to skip TLS verification. Useful for self-signed certs on IP addresses. |
+| `CUBE_DEV_PROXY_URL` | Use an already-running external sidecar instead of launching an embedded one. |
+| `CUBE_DEV_PROXY_HOST` / `CUBE_DEV_PROXY_PORT` | Override the host and port for the embedded sidecar (default `127.0.0.1:12580`). |
+
+## Common mistakes
+
+<Warning>
+  Avoid these configuration errors that are easy to make when first setting up the sidecar:
+</Warning>
+
+- **Using in-VM addresses with `dev-env`**: The `dev-env` forwards ports to the host. Use `127.0.0.1:13000` and `127.0.0.1:11443` (host ports), not the addresses visible inside the VM.
+- **Pointing `CUBE_REMOTE_PROXY_BASE` at the sidecar itself**: This variable must point to CubeProxy on the cluster, not to the sidecar's own listening address.
+- **Forgetting `CUBE_TEMPLATE_ID`**: The SDK will fail to create a sandbox without a valid template ID.
+- **Leaving `E2B_API_KEY` as `dummy` when auth is enabled**: If your cluster has authentication enabled, you must supply the real API key.
+
+## Further reading
+
+- [`examples/e2b-dev-sidecar/README.md`](https://github.com/tencentcloud/CubeSandbox/tree/master/examples/e2b-dev-sidecar/README.md) — full walkthrough of the sidecar example
+- `examples/e2b-dev-sidecar/demo.py` — demo script showing end-to-end usage
+- `examples/e2b-dev-sidecar/dev_sidecar.py` — sidecar implementation you can embed in your own code

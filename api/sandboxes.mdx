@@ -1,0 +1,509 @@
+---
+title: "Sandboxes API — Lifecycle, Pause, Resume, and Logs"
+description: "List, inspect, kill, pause, resume sandboxes, and retrieve structured logs via the CubeSandbox REST API. Full reference with request and response fields."
+---
+
+The Sandboxes resource covers the full lifecycle of a CubeSandbox MicroVM: listing active sandboxes, fetching detailed state, terminating, pausing to a memory snapshot, resuming from that snapshot, and streaming structured logs. All endpoints are served under `/cubeapi/v1`.
+
+---
+
+## List sandboxes (v2)
+
+Returns a filtered, paginated list of sandboxes.
+
+```
+GET /cubeapi/v1/v2/sandboxes
+```
+
+### Query parameters
+
+<ParamField query="metadata" type="string">
+  Filter sandboxes by a metadata key-value expression. Pass the raw metadata string as accepted by CubeMaster.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Filter by sandbox state. Accepted values: `running`, `paused`.
+</ParamField>
+
+<ParamField query="nextToken" type="string">
+  Pagination cursor returned by a previous response. Omit on the first request.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Maximum number of results to return. Uses the server default when omitted.
+</ParamField>
+
+### Response
+
+**HTTP 200** — Array of `ListedSandbox` objects.
+
+<ResponseField name="sandboxID" type="string" required>
+  Unique identifier for the sandbox.
+</ResponseField>
+
+<ResponseField name="templateID" type="string" required>
+  Identifier of the template this sandbox was created from.
+</ResponseField>
+
+<ResponseField name="clientID" type="string" required>
+  Identifier of the client that created the sandbox.
+</ResponseField>
+
+<ResponseField name="startedAt" type="string (datetime)" required>
+  ISO 8601 timestamp of when the sandbox started.
+</ResponseField>
+
+<ResponseField name="endAt" type="string (datetime)" required>
+  ISO 8601 timestamp of when the sandbox is scheduled to expire.
+</ResponseField>
+
+<ResponseField name="cpuCount" type="integer" required>
+  Number of vCPUs allocated to the sandbox.
+</ResponseField>
+
+<ResponseField name="memoryMB" type="integer" required>
+  Memory allocated to the sandbox in MiB.
+</ResponseField>
+
+<ResponseField name="state" type="string" required>
+  Current sandbox state. One of `running` or `paused`.
+</ResponseField>
+
+<ResponseField name="envdVersion" type="string" required>
+  Version of the environment daemon running inside the sandbox.
+</ResponseField>
+
+<ResponseField name="alias" type="string | null">
+  Optional human-readable alias for the sandbox.
+</ResponseField>
+
+<ResponseField name="diskSizeMB" type="integer | null">
+  Disk size allocated to the sandbox in MiB, if set.
+</ResponseField>
+
+<ResponseField name="metadata" type="object | null">
+  Arbitrary string key-value pairs attached to the sandbox at creation time.
+</ResponseField>
+
+<ResponseField name="volumeMounts" type="array | null">
+  List of volume mounts inside the sandbox.
+
+  <Expandable title="VolumeMount fields">
+    <ResponseField name="name" type="string" required>
+      Name of the volume mount.
+    </ResponseField>
+    <ResponseField name="path" type="string" required>
+      Absolute path inside the sandbox where the volume is mounted.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl "http://localhost:3000/cubeapi/v1/v2/sandboxes?state=running&limit=20"
+```
+
+```bash curl (with auth)
+curl -H "Authorization: Bearer your-token" \
+  "http://localhost:3000/cubeapi/v1/v2/sandboxes?state=running&limit=20"
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+[
+  {
+    "sandboxID": "abc123",
+    "templateID": "tmpl-base",
+    "clientID": "client-1",
+    "startedAt": "2026-04-28T10:00:00Z",
+    "endAt": "2026-04-28T11:00:00Z",
+    "cpuCount": 2,
+    "memoryMB": 512,
+    "state": "running",
+    "envdVersion": "0.1.0",
+    "alias": null,
+    "diskSizeMB": 2048,
+    "metadata": { "project": "my-agent" },
+    "volumeMounts": null
+  }
+]
+```
+
+---
+
+## Get sandbox detail
+
+Returns detailed information about a single sandbox.
+
+```
+GET /cubeapi/v1/sandboxes/{sandboxID}
+```
+
+### Path parameters
+
+<ParamField path="sandboxID" type="string" required>
+  The unique identifier of the sandbox to retrieve.
+</ParamField>
+
+### Response
+
+**HTTP 200** — A `SandboxDetail` object.
+
+<ResponseField name="sandboxID" type="string" required>
+  Unique identifier for the sandbox.
+</ResponseField>
+
+<ResponseField name="templateID" type="string" required>
+  Identifier of the template this sandbox was created from.
+</ResponseField>
+
+<ResponseField name="clientID" type="string" required>
+  Identifier of the client that created the sandbox.
+</ResponseField>
+
+<ResponseField name="startedAt" type="string (datetime)" required>
+  ISO 8601 timestamp of when the sandbox started.
+</ResponseField>
+
+<ResponseField name="endAt" type="string (datetime)" required>
+  ISO 8601 timestamp of when the sandbox is scheduled to expire.
+</ResponseField>
+
+<ResponseField name="cpuCount" type="integer" required>
+  Number of vCPUs allocated to the sandbox.
+</ResponseField>
+
+<ResponseField name="memoryMB" type="integer" required>
+  Memory allocated to the sandbox in MiB.
+</ResponseField>
+
+<ResponseField name="state" type="string" required>
+  Current sandbox state. One of `running` or `paused`.
+</ResponseField>
+
+<ResponseField name="envdVersion" type="string" required>
+  Version of the environment daemon running inside the sandbox.
+</ResponseField>
+
+<ResponseField name="alias" type="string | null">
+  Optional human-readable alias for the sandbox.
+</ResponseField>
+
+<ResponseField name="diskSizeMB" type="integer | null">
+  Disk size in MiB, if set.
+</ResponseField>
+
+<ResponseField name="domain" type="string | null">
+  Domain name assigned to the sandbox, used for HTTPS access via CubeProxy.
+</ResponseField>
+
+<ResponseField name="envdAccessToken" type="string | null">
+  Access token for direct connections to the environment daemon.
+</ResponseField>
+
+<ResponseField name="metadata" type="object | null">
+  Arbitrary string key-value pairs attached at creation time.
+</ResponseField>
+
+<ResponseField name="volumeMounts" type="array | null">
+  List of volume mounts inside the sandbox.
+
+  <Expandable title="VolumeMount fields">
+    <ResponseField name="name" type="string" required>
+      Name of the volume mount.
+    </ResponseField>
+    <ResponseField name="path" type="string" required>
+      Absolute path inside the sandbox where the volume is mounted.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**HTTP 404** — Sandbox not found.
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/sandboxes/abc123
+```
+
+</CodeGroup>
+
+---
+
+## Kill sandbox
+
+Permanently terminates a sandbox and releases all its resources.
+
+```
+DELETE /cubeapi/v1/sandboxes/{sandboxID}
+```
+
+### Path parameters
+
+<ParamField path="sandboxID" type="string" required>
+  The unique identifier of the sandbox to terminate.
+</ParamField>
+
+### Response
+
+**HTTP 204** — Sandbox successfully terminated. No response body.
+
+**HTTP 404** — Sandbox not found.
+
+**HTTP 500** — Unexpected backend error.
+
+<Warning>
+  This operation is irreversible. The sandbox and all unsaved state are permanently destroyed. If you need to preserve memory state, pause the sandbox first.
+</Warning>
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl -X DELETE http://localhost:3000/cubeapi/v1/sandboxes/abc123
+```
+
+</CodeGroup>
+
+---
+
+## Pause sandbox
+
+Saves the sandbox memory state to a snapshot and suspends the MicroVM. The sandbox can be resumed later with its state intact.
+
+```
+POST /cubeapi/v1/sandboxes/{sandboxID}/pause
+```
+
+### Path parameters
+
+<ParamField path="sandboxID" type="string" required>
+  The unique identifier of the sandbox to pause.
+</ParamField>
+
+### Response
+
+**HTTP 204** — Sandbox successfully paused. No response body.
+
+**HTTP 404** — Sandbox not found.
+
+**HTTP 409** — Sandbox cannot be paused (for example, it is already paused or in a transitional state).
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl -X POST http://localhost:3000/cubeapi/v1/sandboxes/abc123/pause
+```
+
+</CodeGroup>
+
+---
+
+## Resume sandbox
+
+Restores a paused sandbox from its memory snapshot.
+
+```
+POST /cubeapi/v1/sandboxes/{sandboxID}/resume
+```
+
+<Note>
+  This endpoint is deprecated in favour of `POST /sandboxes/{sandboxID}/connect`, which auto-resumes the sandbox and is used by current versions of the E2B SDK.
+</Note>
+
+### Path parameters
+
+<ParamField path="sandboxID" type="string" required>
+  The unique identifier of the sandbox to resume.
+</ParamField>
+
+### Request body
+
+<ParamField body="autoPause" type="boolean">
+  Whether the sandbox should automatically pause again when idle.
+</ParamField>
+
+<ParamField body="timeout" type="integer">
+  New timeout in seconds applied after resuming. If omitted, the sandbox's existing timeout is used.
+</ParamField>
+
+### Response
+
+**HTTP 201** — Sandbox successfully resumed. Returns a `Sandbox` object.
+
+<ResponseField name="sandboxID" type="string" required>
+  Unique identifier for the sandbox.
+</ResponseField>
+
+<ResponseField name="templateID" type="string" required>
+  Identifier of the template this sandbox was created from.
+</ResponseField>
+
+<ResponseField name="clientID" type="string" required>
+  Identifier of the client that owns the sandbox.
+</ResponseField>
+
+<ResponseField name="envdVersion" type="string" required>
+  Version of the environment daemon running inside the sandbox.
+</ResponseField>
+
+<ResponseField name="alias" type="string | null">
+  Optional human-readable alias for the sandbox.
+</ResponseField>
+
+<ResponseField name="domain" type="string | null">
+  Domain name assigned for HTTPS access via CubeProxy.
+</ResponseField>
+
+<ResponseField name="envdAccessToken" type="string | null">
+  Access token for direct connections to the environment daemon.
+</ResponseField>
+
+<ResponseField name="trafficAccessToken" type="string | null">
+  Access token used by CubeProxy to route traffic to this sandbox.
+</ResponseField>
+
+**HTTP 404** — Sandbox not found.
+
+**HTTP 409** — Sandbox is already running.
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl -X POST http://localhost:3000/cubeapi/v1/sandboxes/abc123/resume \
+  -H "Content-Type: application/json" \
+  -d '{"timeout": 300}'
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+{
+  "sandboxID": "abc123",
+  "templateID": "tmpl-base",
+  "clientID": "client-1",
+  "envdVersion": "0.1.0",
+  "alias": null,
+  "domain": "abc123.cube.app",
+  "envdAccessToken": "tok-envd-xyz",
+  "trafficAccessToken": "tok-traffic-xyz"
+}
+```
+
+---
+
+## Get sandbox logs (v2)
+
+Retrieves structured, cursor-paginated logs from a sandbox.
+
+```
+GET /cubeapi/v1/v2/sandboxes/{sandboxID}/logs
+```
+
+### Path parameters
+
+<ParamField path="sandboxID" type="string" required>
+  The unique identifier of the sandbox whose logs to retrieve.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="cursor" type="integer (int64)">
+  Opaque pagination cursor. On the first request, omit this parameter. Pass the cursor returned by a previous response to fetch the next page.
+</ParamField>
+
+<ParamField query="limit" type="integer (int32)">
+  Maximum number of log entries to return per page. Uses the server default when omitted.
+</ParamField>
+
+<ParamField query="direction" type="string">
+  Log fetch direction. Typically `forward` or `backward`. Defaults to server-defined behaviour when omitted.
+</ParamField>
+
+### Response
+
+**HTTP 200** — A `SandboxLogsV2Response` object.
+
+<ResponseField name="logs" type="array" required>
+  Array of structured log entries.
+
+  <Expandable title="SandboxLogEntry fields">
+    <ResponseField name="timestamp" type="string (datetime)" required>
+      ISO 8601 timestamp when this log entry was emitted.
+    </ResponseField>
+    <ResponseField name="message" type="string" required>
+      Human-readable log message.
+    </ResponseField>
+    <ResponseField name="level" type="string" required>
+      Log severity level. One of `debug`, `info`, `warn`, `error`.
+    </ResponseField>
+    <ResponseField name="fields" type="object" required>
+      Additional structured key-value context attached to the log entry. All keys and values are strings.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**HTTP 404** — Sandbox not found.
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl "http://localhost:3000/cubeapi/v1/v2/sandboxes/abc123/logs?limit=50"
+```
+
+```bash curl (with cursor)
+curl "http://localhost:3000/cubeapi/v1/v2/sandboxes/abc123/logs?cursor=1234567890&limit=50"
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2026-04-28T10:05:00Z",
+      "message": "sandbox environment ready",
+      "level": "info",
+      "fields": {
+        "sandbox_id": "abc123",
+        "envd_version": "0.1.0"
+      }
+    },
+    {
+      "timestamp": "2026-04-28T10:05:01Z",
+      "message": "code execution started",
+      "level": "debug",
+      "fields": {
+        "kernel": "python3"
+      }
+    }
+  ]
+}
+```

@@ -1,0 +1,117 @@
+---
+title: 'CubeSandbox Example Projects: Hands-On Usage Guides'
+description: 'Explore self-contained example projects covering code execution, browser automation, AI agent integration, RL training, and data analysis with CubeSandbox.'
+---
+
+Each example in the CubeSandbox repository is a self-contained project with its own README, source code, and dependency definitions. They cover a range of use cases — from basic sandbox creation to full AI agent pipelines — and are designed to be runnable with minimal setup on top of an existing CubeSandbox deployment.
+
+<Note>
+  All examples share the same environment variable conventions: `E2B_API_URL`, `E2B_API_KEY`, and `CUBE_TEMPLATE_ID`. Complete your CubeSandbox deployment and create a sandbox template before running any example. See the [quickstart](/quickstart) guide to get started.
+</Note>
+
+## Available examples
+
+<CardGroup cols={2}>
+  <Card
+    title="Code Sandbox Quickstart"
+    icon="code"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/code-sandbox-quickstart"
+  >
+    The most basic usage: create a sandbox, run Python code, execute shell commands, manage network policies, and more — all via the E2B SDK. The starting point for any new integration.
+  </Card>
+
+  <Card
+    title="Browser Sandbox (Playwright)"
+    icon="globe"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/browser-sandbox"
+  >
+    Run headless Chromium inside a KVM MicroVM and control it remotely with Playwright via the Chrome DevTools Protocol (CDP). Ideal for web scraping, UI testing, and LLM browser agents.
+  </Card>
+
+  <Card
+    title="OpenClaw Integration"
+    icon="robot"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/openclaw-integration"
+  >
+    Configure the OpenClaw `cube-sandbox` skill so AI agents can execute arbitrary code and shell commands in isolated VM environments using the standard E2B SDK interface.
+  </Card>
+
+  <Card
+    title="SWE-bench with mini-swe-agent"
+    icon="flask-conical"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/mini-rl-training"
+  >
+    Automate SWE-bench coding tasks in isolated sandboxes using CubeSandbox and mini-swe-agent. Supports multiple LLM backends and includes a reinforcement learning training workflow.
+  </Card>
+
+  <Card
+    title="OpenAI Agents SDK Integration"
+    icon="sparkles"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/openai-agents-example"
+  >
+    Wire the OpenAI Agents SDK's `E2BSandboxClient` to CubeSandbox. Ships a minimal Shell Agent with Pause/Resume support and a full SWE-bench Django debugging agent with streaming and tracing.
+  </Card>
+
+  <Card
+    title="OpenAI Agents + Code Interpreter"
+    icon="chart-line"
+    href="https://github.com/tencentcloud/CubeSandbox/tree/master/examples/openai-agents-code-interpreter"
+  >
+    Data-analysis Agent running pandas and matplotlib inside a CubeSandbox. Two variants: generic E2B write-and-exec, and a Jupyter-kernel Code Interpreter with cross-turn state and automatic image capture.
+  </Card>
+</CardGroup>
+
+## Example details
+
+### Code Sandbox Quickstart
+
+This example demonstrates the foundational patterns for any CubeSandbox integration. It uses the E2B Python SDK to create a KVM MicroVM from a template snapshot, run Python code and shell commands inside the isolated environment, and manage network access policies.
+
+**Key technologies:** E2B Python SDK (`e2b`, `e2b-code-interpreter`), Python 3.8+
+
+Each `Sandbox.create()` call boots a new MicroVM in under 50 ms. The sandbox has a dedicated kernel, filesystem, and network. When the `with` block exits, the sandbox is automatically deleted. This example is the right place to start before moving on to any of the more specialized examples.
+
+### Browser Sandbox (Playwright)
+
+Chromium runs in remote-debugging mode on port `9000` inside the MicroVM. CubeProxy routes the CDP WebSocket endpoint through the standard `<port>-<sandbox-id>.<domain>` URL scheme, so Playwright can attach from any machine without custom networking setup.
+
+**Key technologies:** Playwright, Chrome DevTools Protocol (CDP), E2B SDK, Python 3.10+
+
+**Use cases include:** web scraping in a disposable environment, automated UI testing, screenshot and PDF generation services, and LLM agent browsing tasks where each run gets a fresh browser VM.
+
+### OpenClaw Integration
+
+The `cube-sandbox` OpenClaw skill wraps the E2B SDK, letting any OpenClaw agent execute code and shell commands inside ephemeral KVM MicroVMs. Each agent task gets a fully isolated environment with a separate kernel, filesystem, and network. The skill also exposes network policy controls and Pause/Resume support.
+
+**Key technologies:** OpenClaw, E2B Python SDK, Python 3.10+
+
+**Features covered:** isolated execution per task, fast sandbox boot from template snapshot, network allow/deny CIDR lists, full air-gap mode, and stateful sandbox pause and resume.
+
+### SWE-bench with mini-swe-agent
+
+This example runs the SWE-bench software engineering benchmark inside CubeSandbox using the mini-swe-agent framework. Each benchmark task gets a fresh isolated sandbox. The example includes a patch to add E2B environment support to mini-swe-agent, multi-LLM backend configuration (Gemini, TokenHub, OpenAI-compatible endpoints), and documentation of the RL training vision for iterative agent improvement.
+
+**Key technologies:** mini-swe-agent, E2B SDK, Docker (for building envd-injected images), Python 3.10+
+
+**Prerequisites beyond the standard env vars:** at least one LLM API key and Docker for building the sandbox images with the injected environment dependencies.
+
+### OpenAI Agents SDK Integration
+
+This example shows two integration levels. `simple_demo.py` is a minimal Shell Agent that demonstrates Pause/Resume — the agent executes shell commands inside a sandbox and the sandbox state can be snapshotted and restored. `main.py` is a full SWE-bench Django debugging agent that adds streaming output, LLM preflight checks, and end-to-end tracing.
+
+**Key technologies:** OpenAI Agents SDK, `E2BSandboxClient`, E2B Python SDK, Python 3.10+
+
+The `E2BSandboxClient` is the bridge between the OpenAI Agents SDK and any E2B-compatible sandbox backend, including CubeSandbox. Setting `E2B_API_URL` to your CubeAPI address is the only change needed from a standard E2B setup.
+
+### OpenAI Agents + Code Interpreter
+
+This example runs a data-analysis Agent that uses an LLM to write and execute pandas and matplotlib code inside a CubeSandbox. Two backend variants are provided:
+
+| Variant | Backend | Execution model |
+|---|---|---|
+| `code_interpreter_demo.py` | `e2b.AsyncSandbox` | Writes a script file then executes it — each run is a fresh process |
+| `code_interpreter_demo_ci.py` | `e2b_code_interpreter.AsyncSandbox` | Jupyter kernel — variables, imports, and DataFrames persist across turns |
+
+**Key technologies:** OpenAI Agents SDK, `e2b`, `e2b-code-interpreter`, pandas, matplotlib, Python 3.10+
+
+Use the Jupyter-kernel variant when the agent needs to reference results from earlier turns or when automatic image capture from `plt.show()` is required.

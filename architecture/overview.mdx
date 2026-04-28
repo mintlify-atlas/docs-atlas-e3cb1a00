@@ -1,0 +1,104 @@
+---
+title: "CubeSandbox Architecture: Components and Request Flow"
+description: "A layered breakdown of CubeSandbox's components — CubeAPI, CubeMaster, CubeProxy, Cubelet, CubeVS, CubeHypervisor, and CubeShim — and how they interact."
+---
+
+CubeSandbox follows a clear layered architecture, from a high-concurrency REST gateway at the top down to KVM MicroVMs at the hardware level. Each layer has a well-defined responsibility: the control plane routes and schedules requests, the node-local layer manages sandbox lifecycles, and the virtualization layer enforces hardware-level isolation and network security.
+
+## Layered architecture
+
+The stack is organized into three tiers:
+
+1. **Control plane** — CubeAPI accepts client requests and CubeMaster schedules them across the cluster.
+2. **Node plane** — Cubelet manages sandbox instances on each compute node; CubeVS handles all network I/O in kernel space.
+3. **Virtualization layer** — CubeHypervisor and CubeShim run each sandbox as a KVM MicroVM integrated with the container runtime.
+
+## Components
+
+<CardGroup cols={2}>
+  <Card title="CubeAPI" icon="server">
+    High-concurrency REST API gateway written in Rust. Fully compatible with the E2B SDK — swap the `E2B_API_URL` environment variable to migrate from E2B Cloud with no business logic changes.
+  </Card>
+  <Card title="CubeMaster" icon="sitemap">
+    Cluster orchestrator. Receives requests from CubeAPI, dispatches them to the appropriate Cubelet on the correct compute node, and maintains resource scheduling and cluster state.
+  </Card>
+  <Card title="CubeProxy" icon="arrow-right-arrow-left">
+    Reverse proxy that parses the `<port>-<sandbox_id>.<domain>` format in the HTTP `Host` header to route SDK client requests to the exact sandbox instance and port.
+  </Card>
+  <Card title="Cubelet" icon="microchip">
+    Node-local scheduler. Manages the complete lifecycle — create, start, pause, resume, destroy — of every sandbox instance running on a single compute node.
+  </Card>
+  <Card title="CubeVS" icon="shield-halved">
+    eBPF-based network virtualization layer. Performs kernel-space packet forwarding, per-sandbox network isolation, SNAT/DNAT, and security policy enforcement without touching userspace.
+  </Card>
+  <Card title="CubeHypervisor & CubeShim" icon="layer-group">
+    Virtualization layer. CubeHypervisor manages KVM MicroVMs via RustVMM; CubeShim implements the containerd Shim v2 API to integrate sandboxes into the container runtime.
+  </Card>
+</CardGroup>
+
+### Component responsibilities
+
+| Component | Responsibility |
+|---|---|
+| **CubeAPI** | High-concurrency Rust REST gateway, E2B-compatible. Replace the URL to migrate seamlessly from E2B Cloud. |
+| **CubeMaster** | Receives API requests, dispatches them to the corresponding Cubelet, manages resource scheduling and cluster state. |
+| **CubeProxy** | Parses `<port>-<sandbox_id>.<domain>` in the `Host` header; routes SDK requests to the correct sandbox instance. |
+| **Cubelet** | Node-local scheduler; manages the full lifecycle of all sandbox instances on a single node. |
+| **CubeVS** | eBPF-based kernel-level packet forwarding, per-sandbox network isolation, and security policy enforcement. |
+| **CubeHypervisor** | Manages KVM MicroVMs using a Rust-based VMM. |
+| **CubeShim** | Implements containerd Shim v2 API; integrates sandbox MicroVMs into the container runtime. |
+
+## Request flow
+
+A sandbox creation request travels through the full stack in sequence:
+
+```
+Client
+  └─► CubeAPI          (REST gateway — authenticates and validates)
+        └─► CubeMaster  (scheduler — selects target node, dispatches)
+              └─► Cubelet (node agent — creates TAP, registers with CubeVS)
+                    └─► CubeHypervisor / CubeShim
+                              └─► KVM MicroVM sandbox
+```
+
+1. The client sends an E2B-compatible HTTP request to CubeAPI.
+2. CubeAPI forwards the request to CubeMaster after authentication and validation.
+3. CubeMaster selects the best compute node based on available resources and sends the request to that node's Cubelet.
+4. Cubelet creates the sandbox: it provisions a TAP device, registers it with CubeVS for network isolation, then starts the KVM MicroVM through CubeHypervisor/CubeShim.
+5. The MicroVM boots from a pre-built snapshot, reaching a fully serviceable state in under 60ms.
+
+<Note>
+  SDK traffic (file reads, code execution, port access) flows through CubeProxy, not CubeAPI. CubeProxy uses the `Host` header to identify the target sandbox and forwards the connection directly to its Cubelet.
+</Note>
+
+## Multi-node topology
+
+CubeSandbox supports both single-node and multi-node cluster deployments.
+
+| Node type | Runs |
+|---|---|
+| **Control node** | CubeAPI, CubeMaster, CubeProxy, Cubelet, CubeVS (network agent) |
+| **Compute node** | Cubelet, CubeVS (network agent) only |
+
+In a cluster, the control node hosts the full stack and acts as the entry point for all client traffic. Compute nodes run only the node-local components needed to create and manage sandbox instances. CubeMaster on the control node maintains the global view of cluster state and schedules new sandboxes across all nodes.
+
+<Tip>
+  For single-node deployments, all components run on the same machine. The multi-node topology is achieved by adding compute nodes and pointing them at the existing CubeMaster.
+</Tip>
+
+## Key design principles
+
+<AccordionGroup>
+  <Accordion title="Hardware isolation over shared-kernel">
+    Each sandbox runs in its own KVM MicroVM with a dedicated OS kernel. Unlike Docker (which shares the host kernel via Linux namespaces), CubeSandbox provides true hardware-level isolation — container escape attacks that exploit shared-kernel vulnerabilities are not possible.
+  </Accordion>
+  <Accordion title="Snapshot-based fast start">
+    CubeSandbox pre-provisions a pool of MicroVMs from a base snapshot. When a new sandbox is requested, it is cloned from the snapshot using copy-on-write (CoW), skipping all OS boot and initialization time. This is what enables sub-60ms cold starts and under 5MB per-instance memory overhead.
+  </Accordion>
+  <Accordion title="eBPF for kernel-space networking">
+    CubeVS replaces traditional Linux networking (bridges, iptables, OVS) with three cooperating eBPF programs attached directly in the kernel data path. Policy evaluation, NAT, session tracking, and ARP resolution all happen in kernel space with no context switches to userspace. Each sandbox gets a dedicated TAP device — there is no shared bridge or software switch hop.
+  </Accordion>
+  <Accordion title="E2B SDK compatibility">
+    CubeAPI implements the full E2B REST interface. Any application using the E2B SDK can switch to CubeSandbox by setting `E2B_API_URL` to the CubeAPI address — no code changes required. This makes CubeSandbox a drop-in, self-hosted replacement for E2B Cloud.
+  </Accordion>
+</AccordionGroup>

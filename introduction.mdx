@@ -1,0 +1,73 @@
+---
+title: "CubeSandbox: Hardware-Isolated Sandbox for AI Agents"
+description: "CubeSandbox is an open-source, hardware-isolated sandbox for AI agents. Sub-60ms starts, E2B compatible, under 5MB overhead, eBPF network security."
+---
+
+CubeSandbox is a production-grade, open-source sandbox service built on KVM and RustVMM, designed specifically for AI agent code execution. Unlike container-based solutions that share the host kernel, CubeSandbox runs each agent in its own KVM MicroVM with a dedicated guest OS kernel — delivering hardware-level isolation without the performance cost typically associated with virtual machines. It ships as a single deployable service, is drop-in compatible with the E2B SDK, and has been validated at scale in Tencent Cloud production environments.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Sub-60ms cold start" icon="bolt">
+    Resource pool pre-provisioning and snapshot cloning eliminate cold-start overhead entirely. Average end-to-end sandbox creation time is under 60ms at single concurrency; under 150ms at 50 concurrent creations (P99 137ms).
+  </Card>
+  <Card title="True kernel isolation" icon="shield-halved">
+    Each sandbox runs a dedicated OS kernel inside its own MicroVM. There are no shared-kernel namespaces, which eliminates container escape risks and lets agents safely execute any LLM-generated code.
+  </Card>
+  <Card title="E2B SDK compatible" icon="plug">
+    CubeSandbox is a drop-in replacement for E2B Cloud. Change one environment variable (`E2B_API_URL`) and all existing SDK code runs unchanged against your own infrastructure.
+  </Card>
+  <Card title="High-density deployment" icon="server">
+    Copy-on-Write memory reuse combined with an aggressively trimmed Rust runtime keeps per-instance memory overhead under 5MB. You can run thousands of concurrent agents on a single machine.
+  </Card>
+  <Card title="eBPF network security" icon="network-wired">
+    CubeVS enforces per-sandbox network policies in kernel space using eBPF, with strict inter-sandbox isolation and fine-grained egress traffic filtering.
+  </Card>
+  <Card title="Ready out of the box" icon="rocket">
+    A one-click installer gets a fully functional single-node deployment running in minutes. The same installer supports scale-out to multi-node clusters.
+  </Card>
+</CardGroup>
+
+## Architecture
+
+CubeSandbox is a multi-component system. Each component has a clearly scoped responsibility, and together they handle the full sandbox lifecycle from API request to isolated execution.
+
+| Component | Responsibility |
+|---|---|
+| **CubeAPI** | High-concurrency REST API gateway written in Rust, compatible with the E2B protocol. Acts as the entry point for all sandbox requests. |
+| **CubeMaster** | Cluster orchestrator. Receives API requests, dispatches them to the appropriate Cubelet nodes, and manages resource scheduling and cluster state. |
+| **CubeProxy** | Reverse proxy compatible with the E2B protocol, routing traffic to specific sandbox instances. |
+| **Cubelet** | Compute node agent. Manages the complete lifecycle — creation, pausing, resuming, and deletion — of all sandbox instances on a single node. |
+| **CubeVS** | eBPF-based virtual switch providing kernel-level network isolation and security policy enforcement between sandboxes. |
+| **CubeHypervisor & CubeShim** | Virtualization layer. CubeHypervisor manages KVM MicroVMs; CubeShim implements the containerd Shim v2 API to integrate sandboxes into the container runtime. |
+
+## CubeSandbox vs. alternatives
+
+| | Docker | Traditional VM | CubeSandbox |
+|---|---|---|---|
+| **Isolation level** | Low (shared kernel namespaces) | High (dedicated kernel) | **Extreme (dedicated kernel + eBPF)** |
+| **Cold start** | ~200ms | Seconds | **&lt;60ms** |
+| **Memory overhead** | Low (shared kernel) | High (full OS) | **&lt;5MB (aggressively stripped)** |
+| **Deployment density** | High | Low | **Extreme (thousands per node)** |
+| **E2B SDK compatible** | No | No | **Yes — drop-in** |
+
+<Note>
+  Cold start benchmarks are from bare-metal measurements. At single concurrency the average is 60ms; under 50 concurrent creations the average is 67ms, P95 is 90ms, and P99 is 137ms. Memory overhead is measured with sandbox specs up to 32GB.
+</Note>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Boot the dev VM, install CubeSandbox, create a template, and run your first agent in four steps.
+  </Card>
+  <Card title="Dev environment" icon="laptop-code" href="/dev-environment">
+    Set up the QEMU-based disposable VM for trying CubeSandbox without a bare-metal server.
+  </Card>
+  <Card title="Architecture overview" icon="diagram-project" href="/architecture/overview">
+    Deep dive into how CubeAPI, CubeMaster, Cubelet, CubeVS, and the virtualization layer fit together.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/overview">
+    Explore the E2B-compatible REST API for creating and managing sandboxes and templates.
+  </Card>
+</CardGroup>

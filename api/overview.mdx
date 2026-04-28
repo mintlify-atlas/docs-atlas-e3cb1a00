@@ -1,0 +1,124 @@
+---
+title: "CubeAPI REST API — Overview, Auth, and Endpoints"
+description: "Base URL, authentication, E2B SDK compatibility, error format, and navigation to all resource groups in the CubeSandbox REST API reference."
+---
+
+CubeAPI is the Rust REST gateway at the heart of CubeSandbox. It exposes sandbox lifecycle management, template inspection, and cluster observability under a single base URL. The API is fully compatible with the E2B SDK — point `E2B_API_URL` at your CubeSandbox instance and existing SDK code works without modification.
+
+## Base URL
+
+All endpoints are served relative to:
+
+```
+/cubeapi/v1
+```
+
+For example, the health endpoint is `GET /cubeapi/v1/health`. When running locally with the default bind address, the full URL is `http://localhost:3000/cubeapi/v1/health`.
+
+## Authentication
+
+By default, CubeAPI allows all requests without any credential check. Authentication is opt-in: pass `--auth-callback-url` at startup to forward credentials to your own verification service.
+
+```bash
+# Enable authentication at startup
+./cube-api --auth-callback-url https://your-auth-service/verify
+
+# Or via environment variable
+export AUTH_CALLBACK_URL=https://your-auth-service/verify
+./cube-api
+```
+
+When `AUTH_CALLBACK_URL` is set, every incoming request is validated by forwarding the credential header to your callback. If the callback returns HTTP 200, the request is allowed; any other status causes a `401 Unauthorized` response.
+
+### Sending credentials
+
+CubeAPI accepts credentials in two header formats:
+
+| Header | Format | Priority |
+|---|---|---|
+| `Authorization` | `Bearer <token>` | Higher |
+| `X-API-Key` | `<key>` | Lower |
+
+If both headers are present, `Authorization: Bearer` takes priority.
+
+<CodeGroup>
+
+```bash Authorization header
+curl -H "Authorization: Bearer your-token" \
+  http://localhost:3000/cubeapi/v1/health
+```
+
+```bash X-API-Key header
+curl -H "X-API-Key: your-key" \
+  http://localhost:3000/cubeapi/v1/health
+```
+
+</CodeGroup>
+
+### E2B SDK credentials
+
+The E2B SDK reads `E2B_API_KEY` and sends it as `Authorization: Bearer <key>` on every request.
+
+```bash
+export E2B_API_KEY=your-actual-api-key
+export E2B_API_URL=http://localhost:3000
+```
+
+<Tip>
+  For local or development deployments where authentication is disabled, set `E2B_API_KEY` to any non-empty string such as `dummy`. The SDK requires the variable to be present but its value is ignored when the server has no auth callback configured.
+</Tip>
+
+## E2B SDK compatibility
+
+CubeAPI implements the E2B REST contract. Set `E2B_API_URL` to point at your CubeSandbox instance and your existing code runs unchanged:
+
+```python
+import os
+os.environ["E2B_API_URL"] = "http://localhost:3000"
+os.environ["E2B_API_KEY"] = "your-key"
+
+from e2b_code_interpreter import Sandbox
+sbx = Sandbox(template="your-template-id")
+execution = sbx.run_code("print('hello from CubeSandbox')")
+print(execution.text)
+```
+
+<Note>
+  When accessing sandbox services over HTTPS with a self-signed certificate, set `SSL_CERT_FILE` to your CA root certificate path so the SDK's HTTP client can complete TLS verification.
+</Note>
+
+## Error format
+
+All API errors return a JSON object with a numeric code and a human-readable message:
+
+```json
+{
+  "code": 404,
+  "message": "sandbox not found"
+}
+```
+
+<ResponseField name="code" type="integer" required>
+  HTTP-equivalent numeric error code.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable description of the error.
+</ResponseField>
+
+## Resource groups
+
+<CardGroup cols={2}>
+  <Card title="Health" icon="heart-pulse" href="/api/health">
+    Liveness check with running sandbox count. No authentication required.
+  </Card>
+  <Card title="Sandboxes" icon="box" href="/api/sandboxes">
+    Full sandbox lifecycle — list, inspect, kill, pause, resume, and fetch structured logs.
+  </Card>
+  <Card title="Templates" icon="layer-group" href="/api/templates">
+    Browse the template catalog and inspect individual template build status.
+  </Card>
+  <Card title="Cluster & Nodes" icon="server" href="/api/cluster">
+    Cluster capacity overview and per-node resource utilisation and health conditions.
+  </Card>
+</CardGroup>

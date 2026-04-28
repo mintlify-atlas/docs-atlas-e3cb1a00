@@ -1,0 +1,437 @@
+---
+title: "Deploy CubeSandbox on a Single Node from Source"
+description: "Build CubeSandbox from source and deploy the full stack on a single bare-metal x86_64 machine with KVM, including API, proxy, DNS, and databases."
+---
+
+Self-build deployment compiles all CubeSandbox components inside a Docker builder container and installs them on a single bare-metal node. This path is recommended for evaluation, development, testing, and as the baseline for multi-node clusters or custom component builds.
+
+After installation you will have:
+
+- E2B-compatible REST API on port `3000`
+- CubeMaster, Cubelet, network-agent, and CubeShim running as host processes
+- MySQL and Redis managed via Docker Compose
+- CubeProxy with TLS (mkcert) and CoreDNS handling `*.cube.app` domain routing
+
+## Prerequisites
+
+### Hardware
+
+- **Physical machine or bare-metal server** — nested virtualization is not supported
+- **x86_64** architecture
+- **KVM enabled** — verify with `ls /dev/kvm`
+- Recommended: 8+ CPU cores, 16+ GB RAM
+
+### Software — target machine
+
+| Requirement | Notes |
+|---|---|
+| Linux | OpenCloudOS 9 (recommended) or Ubuntu 22.04+ |
+| Docker | Must be installed and running |
+| Root access | `install.sh` requires root privileges |
+| DNS routing | `systemd-resolved` (preferred) or `NetworkManager + dnsmasq` |
+| `tar`, `rg`, `ss` | Required by the install script |
+
+### Software — build machine
+
+| Requirement | Notes |
+|---|---|
+| Docker | For running the builder container |
+| `make` | For building the builder image |
+| `tar`, `python3`, `truncate`, `ldd`, `mkfs.ext4` | For guest image generation and packaging |
+
+<Note>
+The build machine and target machine can be the same physical host.
+</Note>
+
+### Network
+
+- Internet access is required to pull `mysql:8.0` and `redis:7-alpine` Docker images.
+- The `mkcert` binary is bundled inside the release package and installed automatically if not already present on the target machine.
+- CubeProxy image build uses Alpine and PyPI mirrors (configurable via `ALPINE_MIRROR_URL` and `PIP_INDEX_URL`).
+
+## Step 1: Build the release bundle
+
+Perform these steps on the **build machine**.
+
+<Steps>
+  <Step title="Prepare the kernel">
+    Obtain a compiled `vmlinux` kernel file (either compile it yourself or use a prebuilt one) and place it in the designated directory:
+
+    ```bash
+    cp /path/to/vmlinux deploy/one-click/assets/kernel-artifacts/
+    ```
+
+    The default expected filename is `vmlinux`. Override the path with the `ONE_CLICK_CUBE_KERNEL_VMLINUX` environment variable if needed.
+  </Step>
+
+  <Step title="Run the build script">
+    From the repository root:
+
+    ```bash
+    cd cube-sandbox
+    ./deploy/one-click/build-release-bundle-builder.sh
+    ```
+
+    The script will:
+
+    1. Build or reuse the `cube-sandbox-builder` Docker image
+    2. Compile all components inside the builder container: CubeMaster, Cubelet, cube-api, network-agent, cube-agent, CubeShim, cube-runtime
+    3. Build the guest VM image on the host
+    4. Package everything into a release tarball
+  </Step>
+
+  <Step title="Locate the output">
+    On success, the release bundle is created at:
+
+    ```
+    deploy/one-click/dist/cube-sandbox-one-click-<version>.tar.gz
+    ```
+
+    The `<version>` is derived from the current Git commit ID. The bundle contains:
+
+    - All compiled binaries (`cubemaster`, `cubelet`, `cube-api`, `network-agent`, `containerd-shim-cube-rs`, `cube-runtime`)
+    - Guest VM image (`cube-guest-image-cpu.img`)
+    - Kernel package (`cube-kernel-scf.zip`)
+    - CubeProxy and CoreDNS Docker Compose templates
+    - MySQL/Redis Docker Compose templates
+    - Installation scripts (`install.sh`, `install-compute.sh`, `down.sh`, `smoke.sh`)
+    - Environment template (`env.example`)
+  </Step>
+</Steps>
+
+## Step 2: Deploy to the target machine
+
+<Steps>
+  <Step title="Upload and extract">
+    Copy the tarball to the target machine and extract it:
+
+    ```bash
+    tar -xzf cube-sandbox-one-click-<version>.tar.gz
+    cd cube-sandbox-one-click-<version>
+    ```
+  </Step>
+
+  <Step title="Configure environment variables">
+    ```bash
+    cp env.example .env
+    ```
+
+    Most variables have sensible defaults for single-node deployment. The installer auto-detects the node IP from `eth0`. If your primary network interface uses a different name, or you want to pin a specific IP, set it explicitly in `.env`:
+
+    ```bash
+    CUBE_SANDBOX_NODE_IP=<your-node-ip>
+    ```
+
+    See the [Configuration reference](#configuration-reference) section below for all available parameters.
+  </Step>
+
+  <Step title="Install">
+    ```bash
+    sudo ./install.sh
+    ```
+
+    The install script will:
+
+    1. Optionally configure a Docker registry mirror (if `ONE_CLICK_ENABLE_TENCENT_DOCKER_MIRROR=1`)
+    2. Extract the sandbox package to `/usr/local/services/cubetoolbox` (configurable)
+    3. Create required log and data directories
+    4. Symlink CubeShim binaries to `/usr/local/bin/`
+    5. Install the bundled `mkcert`, generate TLS certificates for `cube.app`
+    6. Start MySQL and Redis via Docker Compose
+    7. Build and start the CubeProxy container
+    8. Start CoreDNS and configure host DNS routing for `cube.app`
+    9. Start host processes: `network-agent`, `cubemaster`, `cube-api`, `cubelet`
+    10. Run a health check (if `ONE_CLICK_RUN_QUICKCHECK=1`)
+
+    After installation, `cubemastercli` and `cubecli` are symlinked into `/usr/local/bin`.
+  </Step>
+</Steps>
+
+## Verifying the deployment
+
+### Health check
+
+```bash
+sudo ./smoke.sh
+```
+
+This runs `quickcheck.sh` and verifies that the `cube-api /health` endpoint is responding.
+
+### Test with the E2B SDK
+
+Set the following environment variables on your client machine:
+
+```bash
+export CUBE_TEMPLATE_ID=<your-template-id>
+export E2B_API_URL=http://<target-host>:3000
+export E2B_API_KEY=dummy
+export SSL_CERT_FILE=/root/.local/share/mkcert/rootCA.pem
+```
+
+| Variable | Description |
+|---|---|
+| `CUBE_TEMPLATE_ID` | Sandbox template ID, required by all examples |
+| `E2B_API_URL` | Cube API address; without this the SDK contacts the official E2B cloud |
+| `E2B_API_KEY` | The SDK requires a non-empty value; any string works for local deployments |
+| `SSL_CERT_FILE` | Path to the mkcert CA root certificate, needed for HTTPS connections |
+
+<CodeGroup>
+
+```python run_code.py
+from e2b_code_interpreter import Sandbox
+import os
+
+template_id = os.environ["CUBE_TEMPLATE_ID"]
+
+with Sandbox.create(template=template_id) as sandbox:
+    result = sandbox.run_code("print('Hello from Cube Sandbox!')")
+    print(result)
+```
+
+```python run_command.py
+from e2b_code_interpreter import Sandbox
+import os
+
+template_id = os.environ["CUBE_TEMPLATE_ID"]
+
+with Sandbox.create(template=template_id) as sandbox:
+    result = sandbox.commands.run("echo hello cube")
+    print(result.stdout)
+```
+
+```python read_file.py
+from e2b_code_interpreter import Sandbox
+import os
+
+template_id = os.environ["CUBE_TEMPLATE_ID"]
+
+with Sandbox.create(template=template_id) as sandbox:
+    content = sandbox.files.read("/etc/hosts")
+    print(content)
+```
+
+</CodeGroup>
+
+## Common operations
+
+### Stop all services
+
+```bash
+sudo ./down.sh
+```
+
+This stops all host processes (`cubelet`, `cubemaster`, `cube-api`, `network-agent`), Docker containers (CubeProxy, CoreDNS, MySQL, Redis), and rolls back the `cube.app` DNS routing configuration.
+
+### Reinstall
+
+To reinstall over an existing deployment, run `install.sh` again. The script automatically stops the existing deployment before installing.
+
+### View logs
+
+| Component | Log path |
+|---|---|
+| cube-api | `/data/log/CubeAPI/` |
+| CubeMaster | `/data/log/CubeMaster/` |
+| Cubelet | `/data/log/Cubelet/` |
+| CubeShim | `/data/log/CubeShim/` |
+| Hypervisor (VMM) | `/data/log/CubeVmm/` |
+| CubeProxy | `/data/log/cube-proxy/` |
+| Runtime PID files | `/var/run/cube-sandbox-one-click/` |
+| Process stdout/stderr | `/var/log/cube-sandbox-one-click/` |
+
+## Installed directory structure
+
+After installation, the deployment lives at `/usr/local/services/cubetoolbox/` by default:
+
+```
+/usr/local/services/cubetoolbox/
+├── CubeAPI/bin/cube-api                  # E2B-compatible API server
+├── CubeMaster/
+│   ├── bin/cubemaster                    # Orchestration service
+│   ├── bin/cubemastercli                 # CLI tool
+│   └── conf.yaml                         # CubeMaster configuration
+├── Cubelet/
+│   ├── bin/cubelet                       # Node agent
+│   ├── bin/cubecli                       # CLI tool
+│   ├── config/                           # Cubelet configuration
+│   └── dynamicconf/                      # Dynamic configuration
+├── network-agent/
+│   ├── bin/network-agent                 # Network orchestration service
+│   └── network-agent.yaml                # Configuration
+├── cube-shim/bin/
+│   ├── containerd-shim-cube-rs           # containerd shim
+│   └── cube-runtime                      # Runtime binary
+├── cube-image/
+│   └── cube-guest-image-cpu.img          # Guest VM image
+├── cube-kernel-scf/                      # Kernel artifacts
+├── cubeproxy/                            # CubeProxy Docker Compose and configs
+├── coredns/                              # CoreDNS Docker Compose
+├── support/                              # MySQL/Redis Docker Compose + bundled mkcert
+├── sql/                                  # Database schema and seed data
+├── scripts/one-click/                    # Runtime management scripts
+└── .one-click.env                        # Active environment configuration
+```
+
+## Configuration reference
+
+All configuration is managed through the `.env` file (copied from `env.example`).
+
+### Core deployment options
+
+| Variable | Default | Description |
+|---|---|---|
+| `CUBE_SANDBOX_NODE_IP` | auto-detected from `eth0` | Node's primary network interface IP. Set explicitly if your interface differs from `eth0`. |
+| `ONE_CLICK_DEPLOY_ROLE` | `control` | Deployment role. Use `control` for single-node (default). |
+| `ONE_CLICK_INSTALL_PREFIX` | `/usr/local/services/cubetoolbox` | Installation directory |
+| `ONE_CLICK_RUN_QUICKCHECK` | `1` | Run health check after installation |
+| `ONE_CLICK_RUNTIME_DIR` | `/var/run/cube-sandbox-one-click` | PID and runtime files directory |
+| `ONE_CLICK_LOG_DIR` | `/var/log/cube-sandbox-one-click` | Process stdout/stderr log directory |
+
+### Database and cache
+
+| Variable | Default | Description |
+|---|---|---|
+| `CUBE_SANDBOX_MYSQL_CONTAINER` | `cube-sandbox-mysql` | MySQL container name |
+| `CUBE_SANDBOX_REDIS_CONTAINER` | `cube-sandbox-redis` | Redis container name |
+| `CUBE_SANDBOX_MYSQL_PORT` | `3306` | MySQL port |
+| `CUBE_SANDBOX_REDIS_PORT` | `6379` | Redis port |
+| `CUBE_SANDBOX_MYSQL_ROOT_PASSWORD` | `cube_root` | MySQL root password |
+| `CUBE_SANDBOX_MYSQL_DB` | `cube_mvp` | MySQL database name |
+| `CUBE_SANDBOX_MYSQL_USER` | `cube` | MySQL user |
+| `CUBE_SANDBOX_MYSQL_PASSWORD` | `cube_pass` | MySQL user password |
+| `CUBE_SANDBOX_REDIS_PASSWORD` | `ceuhvu123` | Redis password |
+
+### CubeProxy and DNS
+
+| Variable | Default | Description |
+|---|---|---|
+| `CUBE_PROXY_ENABLE` | `1` | Enable CubeProxy (must be `1` for one-click) |
+| `CUBE_PROXY_HOST_PORT` | `443` | CubeProxy listen port |
+| `CUBE_PROXY_DNS_ENABLE` | `1` | Enable CoreDNS (must be `1` for one-click) |
+| `CUBE_PROXY_DNS_ANSWER_IP` | `${CUBE_SANDBOX_NODE_IP}` | IP returned by CoreDNS for `*.cube.app` |
+| `CUBE_PROXY_COREDNS_BIND_ADDR` | `127.0.0.54` | CoreDNS bind address |
+| `CUBE_API_SANDBOX_DOMAIN` | `cube.app` | Sandbox domain for CubeProxy routing |
+
+### Process addresses
+
+| Variable | Default | Description |
+|---|---|---|
+| `CUBEMASTER_ADDR` | `127.0.0.1:8089` | CubeMaster listen address |
+| `NETWORK_AGENT_HEALTH_ADDR` | `127.0.0.1:19090` | network-agent health endpoint |
+| `CUBE_API_BIND` | `0.0.0.0:3000` | cube-api listen address |
+| `CUBE_API_HEALTH_ADDR` | `127.0.0.1:3000` | cube-api health check address |
+
+### Build-time options
+
+| Variable | Default | Description |
+|---|---|---|
+| `BUILDER_IMAGE` | `cube-sandbox-builder:latest` | Docker image used for compilation |
+| `ONE_CLICK_CUBEMASTER_BUILD_MODE` | `local` | Build mode for CubeMaster (`local` = compile from source) |
+| `ONE_CLICK_CUBELET_BUILD_MODE` | `local` | Build mode for Cubelet |
+| `ONE_CLICK_CUBE_API_BUILD_MODE` | `local` | Build mode for cube-api |
+| `ONE_CLICK_CUBE_KERNEL_VMLINUX` | `assets/kernel-artifacts/vmlinux` | Path to the vmlinux kernel file |
+
+To skip compilation and use prebuilt binaries, set the corresponding `ONE_CLICK_*_BIN` variable. For example:
+
+```bash
+ONE_CLICK_CUBEMASTER_BIN=/abs/path/to/cubemaster
+ONE_CLICK_CUBELET_BIN=/abs/path/to/cubelet
+ONE_CLICK_CUBE_API_BIN=/abs/path/to/cube-api
+ONE_CLICK_NETWORK_AGENT_BIN=/abs/path/to/network-agent
+ONE_CLICK_CUBESHIM_BIN=/abs/path/to/containerd-shim-cube-rs
+ONE_CLICK_CUBE_RUNTIME_BIN=/abs/path/to/cube-runtime
+```
+
+### Docker mirror (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `ONE_CLICK_ENABLE_TENCENT_DOCKER_MIRROR` | `0` | Enable Tencent Cloud Docker registry mirror |
+| `ONE_CLICK_TENCENT_DOCKER_MIRROR_URL` | `https://mirror.ccs.tencentyun.com` | Mirror URL |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Docker not installed or not running">
+    ```
+    Error: required command not found: docker
+    ```
+
+    Install Docker following the [official documentation](https://docs.docker.com/engine/install/) and ensure the daemon is running:
+
+    ```bash
+    sudo systemctl start docker
+    sudo systemctl enable docker
+    ```
+  </Accordion>
+
+  <Accordion title="KVM not available">
+    If `/dev/kvm` does not exist, KVM is not enabled. Ensure you are running on a physical machine (not a VM) and that the kernel supports KVM:
+
+    ```bash
+    lsmod | grep kvm
+    ```
+
+    For Intel CPUs you need `kvm_intel`; for AMD, `kvm_amd`.
+  </Accordion>
+
+  <Accordion title="DNS routing failure">
+    The install script configures `cube.app` split DNS via `systemd-resolved` or `NetworkManager + dnsmasq`. If neither is available, installation will fail.
+
+    **Workaround:** Manually add DNS entries for `*.cube.app` pointing to `CUBE_SANDBOX_NODE_IP` in `/etc/hosts` or your DNS server.
+  </Accordion>
+
+  <Accordion title="MySQL or Redis container fails to start">
+    Check Docker logs:
+
+    ```bash
+    docker logs cube-sandbox-mysql
+    docker logs cube-sandbox-redis
+    ```
+
+    Common causes:
+    - Port conflicts (3306 or 6379 already in use)
+    - Insufficient disk space for Docker volumes
+    - Docker daemon issues
+  </Accordion>
+
+  <Accordion title="ripgrep (rg) not installed">
+    ```
+    Error: required command not found: rg
+    ```
+
+    <Tabs>
+      <Tab title="Ubuntu / Debian">
+        ```bash
+        sudo apt-get install ripgrep
+        ```
+      </Tab>
+      <Tab title="CentOS / RHEL">
+        ```bash
+        sudo yum install ripgrep
+        ```
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="vmlinux missing">
+    If `vmlinux` is missing from `assets/kernel-artifacts/`, the build will fail immediately. Place a compiled `vmlinux` file in that directory before running the build script.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-node deployment" icon="server" href="/deployment/multi-node">
+    Scale out by adding compute-only nodes to the cluster.
+  </Card>
+  <Card title="HTTPS and domain" icon="lock" href="/deployment/https-and-domain">
+    Configure TLS certificates and custom domain routing.
+  </Card>
+  <Card title="Authentication" icon="key" href="/deployment/authentication">
+    Enable API key authentication with a callback service.
+  </Card>
+  <Card title="Templates" icon="box" href="/templates/overview">
+    Create and manage sandbox templates.
+  </Card>
+</CardGroup>

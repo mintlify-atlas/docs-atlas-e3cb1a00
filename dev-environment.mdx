@@ -1,0 +1,150 @@
+---
+title: "Dev Environment: QEMU VM for CubeSandbox Evaluation"
+description: "How to set up and use the disposable QEMU-based OpenCloudOS 9 VM included in CubeSandbox for trying or developing CubeSandbox without a bare-metal server."
+---
+
+The `dev-env/` directory in the CubeSandbox repository provides a set of scripts that boot a disposable OpenCloudOS 9 virtual machine using QEMU, letting you run CubeSandbox on any KVM-capable Linux host — including WSL 2 and cloud VMs with nested virtualization — without needing a dedicated bare-metal server. The VM is intentionally throwaway: you can reset it to a clean state at any time by deleting `.workdir/` and re-running `prepare_image.sh`.
+
+<Warning>
+  This is a development and evaluation environment, not a production deployment method. For production, use the [quickstart](/quickstart) or [multi-node cluster deployment](/deployment/multi-node) on bare metal.
+</Warning>
+
+## Prerequisites
+
+The scripts must run on one of the following hosts:
+
+- **WSL 2 on Windows** — requires Windows 11 22H2+ with nested virtualization enabled in WSL
+- **A Linux physical machine**
+- **A Linux VM with nested virtualization enabled** — cloud VMs and local VMs both work
+
+In all cases, the host must satisfy these requirements:
+
+- `/dev/kvm` exists and is read/writable
+- Nested virtualization is enabled (CubeSandbox runs additional KVM MicroVMs inside the guest, so the guest itself needs a usable `/dev/kvm`)
+- The following packages are installed: `qemu-system-x86_64`, `qemu-img`, `curl`, `ssh`, `scp`, `setsid`, `ripgrep`
+
+### Verify nested virtualization
+
+```bash
+ls -l /dev/kvm
+
+# Intel CPU
+cat /sys/module/kvm_intel/parameters/nested
+
+# AMD CPU
+cat /sys/module/kvm_amd/parameters/nested
+```
+
+If the `nested` parameter reads `N` or `0`, enable it before continuing. Example for Intel:
+
+```bash
+echo 'options kvm_intel nested=1' | sudo tee /etc/modprobe.d/kvm.conf
+sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
+```
+
+## Scripts overview
+
+The `dev-env/` directory contains three main scripts and a set of internal helpers:
+
+<Tree>
+  <Tree.Folder name="dev-env/" defaultOpen>
+    <Tree.File name="prepare_image.sh" />
+    <Tree.File name="run_vm.sh" />
+    <Tree.File name="login.sh" />
+    <Tree.Folder name="internal/">
+      <Tree.File name="grow_rootfs.sh" />
+      <Tree.File name="setup_selinux.sh" />
+      <Tree.File name="setup_path.sh" />
+      <Tree.File name="setup_banner.sh" />
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+## Setup steps
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/tencentcloud/CubeSandbox.git
+    cd CubeSandbox/dev-env
+    ```
+  </Step>
+
+  <Step title="Prepare the image (one-off)">
+    ```bash
+    ./prepare_image.sh
+    ```
+
+    This script downloads the official OpenCloudOS 9 qcow2 image from the Tencent mirror, grows the root partition and filesystem to use a full 100GB disk, flips SELinux to `permissive` mode (required for CubeSandbox's MySQL container bind-mounts), and ensures `cubemastercli` and related tools are on the `PATH` for both login shells and `sudo`.
+
+    You only need to run this once per fresh image, or again after deleting the generated `.workdir/` directory.
+  </Step>
+
+  <Step title="Boot the VM">
+    ```bash
+    ./run_vm.sh
+    ```
+
+    The QEMU serial console attaches to the current terminal. Keep this terminal open — closing it or pressing `Ctrl+a x` powers the VM off.
+
+    Default resources: 4 CPUs, 8192MB RAM.
+  </Step>
+
+  <Step title="Log in (in a second terminal)">
+    ```bash
+    cd CubeSandbox/dev-env
+    ./login.sh
+    ```
+
+    `login.sh` SSHs into the VM and drops you into a root shell. CubeSandbox's installer requires root.
+
+    You are now inside the disposable VM and ready to install CubeSandbox. Follow the [quickstart](/quickstart) from Step 2 onward.
+  </Step>
+</Steps>
+
+## Host-to-guest port mappings
+
+`run_vm.sh` configures these port forwards automatically:
+
+| Host address | Guest port | Purpose |
+|---|---|---|
+| `127.0.0.1:10022` | `:22` | SSH access to the dev VM (used by `login.sh`) |
+| `127.0.0.1:13000` | `:3000` | CubeSandbox E2B-compatible API |
+
+If you reach the CubeSandbox API from the host (rather than from inside the VM), use `http://127.0.0.1:13000` as `E2B_API_URL`.
+
+## Environment overrides
+
+All three scripts accept environment variables to customize their behavior:
+
+```bash
+# Download and resize only — skip the in-guest auto-grow workflow
+AUTO_BOOT=0 ./prepare_image.sh
+
+# Boot with more resources or change the forwarded API port
+VM_MEMORY_MB=16384 VM_CPUS=8 CUBE_API_PORT=23000 ./run_vm.sh
+
+# Boot without requiring nested KVM (the OS will boot but sandboxes won't run)
+REQUIRE_NESTED_KVM=0 ./run_vm.sh
+
+# Log in as the regular user instead of root
+LOGIN_AS_ROOT=0 ./login.sh
+```
+
+## Resetting the VM
+
+To reset the VM to a clean state:
+
+1. Stop any running `run_vm.sh` process (`Ctrl+a x` in its terminal).
+2. Delete `dev-env/.workdir/`.
+3. Run `./prepare_image.sh` again.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No `/dev/kvm` inside the guest | Host does not have nested KVM enabled | Enable nested virtualization on the host and reboot the VM |
+| `./login.sh` cannot connect | VM not booted yet, or host port `10022` is already in use | Confirm `./run_vm.sh` is still running; or override with `SSH_PORT=<other-port> ./run_vm.sh` |
+| `cube-sandbox-mysql` keeps restarting with `Permission denied` | Guest SELinux is still enforcing | Re-run `./prepare_image.sh`, or inside the guest run: `setenforce 0 && sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config && docker restart cube-sandbox-mysql` |
+| `df -h /` inside the guest shows a small filesystem | The auto-grow step did not complete | Inspect `.workdir/qemu-serial.log`, then `scp internal/grow_rootfs.sh` into the guest and run it manually |
+| Host port `13000` is already taken | Another service is bound to port 13000 | Use `CUBE_API_PORT=23000 ./run_vm.sh` and update `E2B_API_URL` to `http://127.0.0.1:23000` |

@@ -1,0 +1,61 @@
+---
+title: 'Templates: Pre-built Snapshots for Fast Sandbox Starts'
+description: 'Learn what CubeSandbox templates are, how they are built through a three-phase lifecycle, and why memory snapshots enable sub-60ms sandbox creation.'
+---
+
+A **template** is an immutable, pre-built bundle consisting of a rootfs filesystem and a MicroVM memory snapshot. When you create a sandbox from a template, CubeSandbox restores that snapshot rather than cold-booting a new virtual machine — skipping all initialization work and enabling sandbox creation in under 60 milliseconds.
+
+## What a template contains
+
+Every template packages two artifacts:
+
+- **rootfs** — an ext4 filesystem image built from your OCI container image. It holds your OS, language runtimes, packages, and the `envd` daemon that the Cube platform uses to communicate with the sandbox.
+- **memory snapshot** — a point-in-time capture of the MicroVM's RAM and CPU state, taken after the system has fully booted and your application is ready to serve traffic.
+
+Together, these artifacts let the runtime skip the boot sequence entirely. Instead of waiting for the kernel, init system, language runtime, and application to start, the platform simply loads the pre-captured state from the snapshot.
+
+## Three-phase lifecycle
+
+Every template is built through a deterministic three-phase pipeline that runs asynchronously on the cluster.
+
+<Steps>
+  <Step title="Init — build the rootfs">
+    CubeMaster uses Buildkit to pull your OCI image and convert it into an ext4 rootfs that meets the sandbox runtime requirements. This phase appears as `PULLING` then `BUILDING` in the job status.
+  </Step>
+  <Step title="Boot & snapshot — capture memory state">
+    The rootfs is cold-booted inside a MicroVM. CubeMaster waits until the readiness probe (an HTTP GET to `envd` on port 49983, or a port you specify) returns HTTP 2xx, then immediately takes a snapshot of the full memory and CPU state. This captures the system at the exact moment it is ready to serve requests.
+  </Step>
+  <Step title="Deploy — register and distribute">
+    The rootfs and snapshot files are registered in CubeMaster and distributed to cluster nodes. Once distribution is complete, the template reaches `READY` status and can be referenced by `template_id` to create sandboxes in tens of milliseconds.
+  </Step>
+</Steps>
+
+## Why snapshotting matters
+
+Without snapshotting, every sandbox creation triggers a full cold boot: kernel init, process manager, language runtime, application startup. For a Python or Node environment, that sequence commonly takes 2–5 seconds.
+
+With a memory snapshot, none of that work happens at creation time. The runtime loads the pre-captured RAM contents and resumes execution from the exact point the snapshot was taken. The result is a ready sandbox in under 60 ms — fast enough to create sandboxes on-demand in response to individual user requests.
+
+The snapshot is taken **after** the probe succeeds, so every sandbox launched from the template starts with its application already warm and ready to accept traffic.
+
+## Template states
+
+| State | Meaning |
+|-------|---------|
+| `PENDING` | Job accepted; image pull has not started yet. |
+| `PULLING` | CubeMaster is pulling the OCI image from the registry. |
+| `BUILDING` | Buildkit is converting the image to an ext4 rootfs. |
+| `DISTRIBUTING` | Rootfs and snapshot are being copied to cluster nodes. |
+| `READY` | Template is fully distributed and available for sandbox creation. |
+| `FAILED` | One of the phases failed; inspect `last_error` with `tpl info --json`. |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Create a template from an OCI image" icon="box" href="/templates/from-oci-image">
+    Full CLI walkthrough: create, monitor, inspect, and delete templates using `cubemastercli`.
+  </Card>
+  <Card title="Bring your own image" icon="docker" href="/templates/bring-your-own-image">
+    How to prepare a custom Docker image with `envd` so it passes the readiness probe.
+  </Card>
+</CardGroup>

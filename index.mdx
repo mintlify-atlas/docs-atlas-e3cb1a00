@@ -1,133 +1,79 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "CubeSandbox: Instant, Secure Sandbox for AI Agents"
+description: "CubeSandbox is a hardware-isolated sandbox service built on KVM and RustVMM. Sub-60ms cold starts, E2B SDK compatibility, and eBPF network security."
 ---
 
-## Setting up
+CubeSandbox is a high-performance, open-source sandbox service that lets AI agents execute code in fully isolated, hardware-level environments. Built on KVM MicroVMs and RustVMM, it delivers sub-60ms cold starts, less than 5MB per-instance memory overhead, and a drop-in replacement for the E2B SDK — all deployable on your own infrastructure.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Go from zero to a running sandbox in minutes with the one-click installer.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    Understand how CubeAPI, CubeMaster, Cubelet, and CubeVS work together.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the E2B-compatible REST API for managing sandboxes and templates.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Examples" icon="flask" href="/guides/examples">
+    See real-world integrations: code execution, browser automation, OpenAI Agents, and RL training.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why CubeSandbox?
 
-Everything you need to create world-class documentation.
+CubeSandbox was built to solve the fundamental tension between security and performance in AI agent code execution.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Sub-60ms cold start" icon="bolt">
+    Resource pool pre-provisioning and snapshot cloning skip all cold-start overhead. Average end-to-end time is under 60ms at single concurrency, under 150ms at 50 concurrent creations.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="True kernel isolation" icon="shield-halved">
+    Each sandbox runs a dedicated OS kernel in its own MicroVM. No shared-kernel container escapes — every agent is fully isolated at the hardware level.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="E2B SDK compatible" icon="plug">
+    Drop in as a replacement for E2B Cloud. Change one environment variable (`E2B_API_URL`) and your existing SDK code runs unchanged against your own infrastructure.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="High-density deployment" icon="server">
+    Under 5MB memory overhead per sandbox via CoW technology and an aggressively trimmed Rust runtime. Run thousands of agents on a single machine.
   </Card>
-</Columns>
+  <Card title="eBPF network security" icon="network-wired">
+    CubeVS enforces per-sandbox network policies entirely in kernel space using eBPF, with CIDR-based egress filtering and strict inter-sandbox isolation.
+  </Card>
+  <Card title="Single and multi-node" icon="sitemap">
+    One-click installer supports both standalone single-node deployments and horizontal scale-out to multi-node clusters.
+  </Card>
+</CardGroup>
 
-## Make your content agent ready
+## Get started
 
-Make your docs work for humans and AI agents alike.
+<Steps>
+  <Step title="Prepare your environment">
+    CubeSandbox requires a KVM-enabled x86_64 Linux host. Use WSL 2, a Linux physical machine, or a cloud bare-metal server. See [Dev Environment](/dev-environment) for using a disposable QEMU VM.
+  </Step>
+  <Step title="Install CubeSandbox">
+    Run the one-click installer inside your Linux environment:
+    ```bash
+    curl -sL https://github.com/tencentcloud/CubeSandbox/raw/master/deploy/one-click/online-install.sh | bash
+    ```
+  </Step>
+  <Step title="Create a template">
+    Build a sandbox template from the prebuilt code-interpreter image using `cubemastercli`. See [Quickstart](/quickstart) for the full command.
+  </Step>
+  <Step title="Run your first agent">
+    Install `e2b-code-interpreter`, point `E2B_API_URL` at your local instance, and run code in an isolated sandbox using the standard E2B SDK.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+## Compare to alternatives
 
-## Need inspiration?
+| | Docker | Traditional VM | CubeSandbox |
+|---|---|---|---|
+| **Isolation** | Low (shared kernel) | High (dedicated kernel) | **Extreme (dedicated kernel + eBPF)** |
+| **Cold start** | ~200ms | Seconds | **&lt;60ms** |
+| **Memory overhead** | Low | High | **&lt;5MB** |
+| **E2B compatible** | No | No | **Yes** |
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  CubeSandbox has been validated at scale in Tencent Cloud production environments.
+</Note>

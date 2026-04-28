@@ -1,81 +1,170 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Quickstart: Run Your First CubeSandbox in Minutes"
+description: "Step-by-step guide to install CubeSandbox, create a code-interpreter template, and execute agent code in a hardware-isolated KVM MicroVM sandbox."
 ---
 
-## Get started in three steps
+CubeSandbox requires a KVM-enabled x86_64 Linux environment to run its hardware-isolated MicroVMs. This guide walks you through booting a disposable development VM (for those without a bare-metal server), installing CubeSandbox with the one-click installer, creating a sandbox template, and running your first agent code using the E2B SDK — all in four steps.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  If you already have a KVM-enabled x86_64 Linux bare-metal server, you can skip Step 1 and run the Step 2 installer directly on that server.
+</Note>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Any one of the following hosts works:
 
-### Step 2: Deploy your changes
+- **WSL 2 on Windows** — Windows 11 22H2+ with nested virtualization enabled in WSL
+- **An x86_64 Linux physical machine**
+- **A Linux VM with nested virtualization enabled** — for example, Ubuntu 22.04 on VMware with "Virtualize Intel VT-x/EPT or AMD-V/RVI" enabled in the VM's CPU settings
+- **An x86_64 bare-metal Linux server**
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+All environments must satisfy these common requirements:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+1. `/dev/kvm` exists and is read/writable
+2. **Docker** and **QEMU** are installed and running
+3. Internet access to clone the repository, download the release bundle, and pull Docker images
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+## Installation steps
 
-### Step 3: Go live
+<Steps>
+  <Step title="Boot the development VM">
+    If you do not have a bare-metal server, clone the repository and use the `dev-env/` scripts to boot a disposable OpenCloudOS 9 VM on your host.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    Before running the commands below, ensure `qemu`, `qemu-img`, and `ripgrep` are installed on your Linux machine.
+
+    In your **first terminal**, run:
+
+    <Tabs>
+      <Tab title="Global">
+        ```bash
+        git clone https://github.com/tencentcloud/CubeSandbox.git
+        cd CubeSandbox/dev-env
+        ./prepare_image.sh   # one-off: download + init the OpenCloudOS 9 image
+        ./run_vm.sh          # boot the VM; keep this terminal open (Ctrl+a x to power off)
+        ```
+      </Tab>
+      <Tab title="Mainland China mirror">
+        ```bash
+        git clone https://cnb.cool/CubeSandbox/CubeSandbox
+        cd CubeSandbox/dev-env
+        ./prepare_image.sh   # one-off: download + init the OpenCloudOS 9 image
+        ./run_vm.sh          # boot the VM; keep this terminal open (Ctrl+a x to power off)
+        ```
+      </Tab>
+    </Tabs>
+
+    In a **second terminal**, log into the VM:
+
+    ```bash
+    cd CubeSandbox/dev-env
+    ./login.sh   # SSH into the VM as root
+    ```
+
+    All the following steps run inside this VM shell. See [Dev Environment](/dev-environment) for host self-check steps, port mappings, environment overrides, and troubleshooting.
+  </Step>
+
+  <Step title="Install CubeSandbox">
+    Inside the dev VM (or directly on your bare-metal server), run the one-click installer:
+
+    <Tabs>
+      <Tab title="Global">
+        ```bash
+        curl -sL https://github.com/tencentcloud/CubeSandbox/raw/master/deploy/one-click/online-install.sh | bash
+        ```
+      </Tab>
+      <Tab title="Mainland China mirror">
+        ```bash
+        curl -sL https://cnb.cool/CubeSandbox/CubeSandbox/-/git/raw/master/deploy/one-click/online-install.sh | MIRROR=cn bash
+        ```
+      </Tab>
+    </Tabs>
+
+    The installer sets up:
+
+    - E2B-compatible REST API listening on port `3000`
+    - CubeMaster, Cubelet, network-agent, and CubeShim running as host processes
+    - MySQL and Redis managed via Docker Compose
+    - CubeProxy with TLS (mkcert) and CoreDNS for `cube.app` domain routing
+
+    After installation completes, `cubemastercli` and `cubecli` are symlinked into `/usr/local/bin`.
+  </Step>
+
+  <Step title="Create a template">
+    Create a code-interpreter template from the prebuilt image:
+
+    ```bash
+    cubemastercli tpl create-from-image \
+      --image ccr.ccs.tencentyun.com/ags-image/sandbox-code:latest \
+      --writable-layer-size 1G \
+      --expose-port 49999 \
+      --expose-port 49983 \
+      --probe 49999
+    ```
+
+    The command outputs a `job_id`. Monitor the build with:
+
+    ```bash
+    cubemastercli tpl watch --job-id <job_id>
+    ```
+
+    <Warning>
+      The image is fairly large. Downloading, extracting, and building the template can take several minutes — wait for the status to reach `READY` before continuing.
+    </Warning>
+
+    Note the **template ID** (`template_id`) from the output — you will need it in the next step. For the full template creation workflow and additional CLI options, see [Creating templates from OCI images](/templates/from-oci-image).
+  </Step>
+
+  <Step title="Run your first agent">
+    Install the Python SDK inside the VM:
+
+    ```bash
+    yum install -y python3 python3-pip
+    pip install e2b-code-interpreter
+    ```
+
+    Set the required environment variables, replacing `<your-template-id>` with the template ID from Step 3:
+
+    ```bash
+    export E2B_API_URL="http://127.0.0.1:3000"
+    export E2B_API_KEY="dummy"
+    export CUBE_TEMPLATE_ID="<your-template-id>"
+    export SSL_CERT_FILE="/root/.local/share/mkcert/rootCA.pem"
+    ```
+
+    | Variable | Description |
+    |---|---|
+    | `E2B_API_URL` | Points the E2B SDK to your local CubeSandbox instance instead of E2B cloud |
+    | `E2B_API_KEY` | The SDK requires a non-empty value; any string works |
+    | `CUBE_TEMPLATE_ID` | The template ID obtained in Step 3 |
+    | `SSL_CERT_FILE` | mkcert CA root certificate for HTTPS connections to the sandbox |
+
+    Run code inside a hardware-isolated sandbox:
+
+    ```python
+    import os
+    from e2b_code_interpreter import Sandbox  # drop-in E2B SDK
+
+    # CubeSandbox transparently intercepts all requests
+    with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"]) as sandbox:
+        result = sandbox.run_code("print('Hello from Cube Sandbox, safely isolated!')")
+        print(result)
+    ```
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Templates" icon="layer-group" href="/templates/from-oci-image">
+    Customize your sandbox environment by building templates from your own OCI images.
+  </Card>
+  <Card title="Multi-node deployment" icon="sitemap" href="/deployment/multi-node">
+    Scale CubeSandbox beyond a single machine by adding compute nodes to a cluster.
+  </Card>
+  <Card title="HTTPS and domain setup" icon="lock" href="/deployment/https-and-domain">
+    Configure TLS and custom domain routing for your CubeSandbox installation.
+  </Card>
+  <Card title="Examples" icon="flask" href="/guides/examples">
+    Explore end-to-end examples: shell commands, file operations, browser automation, RL training, and more.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

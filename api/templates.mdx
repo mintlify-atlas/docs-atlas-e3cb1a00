@@ -1,0 +1,186 @@
+---
+title: "Templates API — List and Inspect Sandbox Templates"
+description: "Browse the CubeSandbox template catalog and inspect individual template build status, replica count, and instance type via the REST API."
+---
+
+Templates define the filesystem and runtime configuration that sandboxes are cloned from. CubeAPI exposes read-only endpoints to list all templates visible to the cluster and to retrieve the detailed build and replica state of a single template. Template creation and building are managed through `cubemastercli` or the CubeMaster API directly.
+
+## Template status values
+
+| Status | Meaning |
+|---|---|
+| `building` | The template image is being prepared. Sandboxes cannot be created from it yet. |
+| `ready` | The template is available and sandboxes can be created. |
+| `error` | Template build failed. Check `lastError` for details. |
+
+---
+
+## List templates
+
+Returns a summary of every template known to the cluster.
+
+```
+GET /cubeapi/v1/templates
+```
+
+### Query parameters
+
+<ParamField query="instance_type" type="string">
+  Filter templates by instance type. This parameter is currently reserved — the server accepts it but does not yet apply server-side filtering. It is safe to pass for forward compatibility.
+</ParamField>
+
+### Response
+
+**HTTP 200** — Array of `TemplateSummary` objects.
+
+<ResponseField name="templateID" type="string" required>
+  Unique identifier for the template.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current build status. One of `building`, `ready`, or `error`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (datetime) | null">
+  ISO 8601 timestamp of when the template was created.
+</ResponseField>
+
+<ResponseField name="imageInfo" type="string | null">
+  Descriptor of the base OCI image used to build this template.
+</ResponseField>
+
+<ResponseField name="instanceType" type="string | null">
+  Instance type label (for example, a hardware tier) associated with this template.
+</ResponseField>
+
+<ResponseField name="lastError" type="string | null">
+  Most recent error message from the build process. Populated when `status` is `error`.
+</ResponseField>
+
+<ResponseField name="version" type="string | null">
+  Template version string, if the template tracks versioning.
+</ResponseField>
+
+**HTTP 404** — Template endpoint unavailable (CubeMaster unreachable).
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/templates
+```
+
+```bash curl (with auth)
+curl -H "Authorization: Bearer your-token" \
+  http://localhost:3000/cubeapi/v1/templates
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+[
+  {
+    "templateID": "tmpl-base",
+    "status": "ready",
+    "createdAt": "2026-04-01T12:00:00Z",
+    "imageInfo": "us-docker.pkg.dev/e2b-prod/public/envd:0.1.1",
+    "instanceType": null,
+    "lastError": null,
+    "version": "0.1.1"
+  },
+  {
+    "templateID": "tmpl-browser",
+    "status": "building",
+    "createdAt": null,
+    "imageInfo": null,
+    "instanceType": null,
+    "lastError": null,
+    "version": null
+  }
+]
+```
+
+---
+
+## Get template detail
+
+Returns the full detail record for a single template, including replica information and the original create request.
+
+```
+GET /cubeapi/v1/templates/{templateID}
+```
+
+### Path parameters
+
+<ParamField path="templateID" type="string" required>
+  The unique identifier of the template to retrieve.
+</ParamField>
+
+### Response
+
+**HTTP 200** — A `TemplateDetail` object.
+
+<ResponseField name="templateID" type="string" required>
+  Unique identifier for the template.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current build status. One of `building`, `ready`, or `error`.
+</ResponseField>
+
+<ResponseField name="replicas" type="array" required>
+  List of replica descriptors for this template across the cluster. The structure of each replica entry depends on the CubeMaster version.
+</ResponseField>
+
+<ResponseField name="createRequest" type="object | null">
+  The original request payload used to build this template, if available. The exact schema is CubeMaster version-dependent.
+</ResponseField>
+
+<ResponseField name="instanceType" type="string | null">
+  Instance type label associated with this template.
+</ResponseField>
+
+<ResponseField name="lastError" type="string | null">
+  Most recent error message from the build process. Populated when `status` is `error`.
+</ResponseField>
+
+<ResponseField name="version" type="string | null">
+  Template version string, if set.
+</ResponseField>
+
+**HTTP 404** — Template not found.
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/templates/tmpl-base
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+{
+  "templateID": "tmpl-base",
+  "status": "ready",
+  "replicas": [],
+  "createRequest": null,
+  "instanceType": null,
+  "lastError": null,
+  "version": "0.1.1"
+}
+```
+
+<Tip>
+  Use `lastError` to diagnose build failures. If `status` is `error` and `lastError` is populated, the string contains the CubeMaster error message from the most recent build attempt.
+</Tip>

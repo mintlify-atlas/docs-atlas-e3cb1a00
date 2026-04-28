@@ -1,0 +1,218 @@
+---
+title: 'Create CubeSandbox Templates from OCI Images'
+description: 'Step-by-step CLI guide to create, monitor, query, and delete CubeSandbox templates from any standard OCI container image using cubemastercli.'
+---
+
+`cubemastercli` is the command-line tool for managing the full template lifecycle: submitting a build job from an OCI image, watching progress, inspecting results, and cleaning up when a template is no longer needed. This page walks through each operation in order.
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+- `cubemastercli` installed and available on `$PATH`
+- `CUBEMASTER_ADDR` environment variable set to your CubeMaster address, **or** pass `--server <host:port>` to every command
+- The OCI image accessible from the CubeMaster nodes (public registry, or private registry with credentials)
+
+<Warning>
+**Your image must expose an HTTP server.** During template creation, the platform boots the container and probes it over HTTP to determine when it is ready. If the probe times out, template creation fails.
+
+You must pass:
+- `--expose-port <port>` — the port your HTTP server listens on
+- `--probe <port>` — the port the platform will probe
+- `--probe-path <path>` — the HTTP path the platform will `GET` (e.g. `/health`)
+
+If you are using the official `cubesandbox-base` image, `envd` already listens on `:49983/health`. For custom images, see [Bring your own image](/templates/bring-your-own-image).
+</Warning>
+
+## Step 1 — Create the template
+
+Use `tpl create-from-image` to submit a build job. The command returns immediately with a `job_id` and a pre-assigned `template_id`; the build continues asynchronously on the cluster.
+
+```bash
+cubemastercli tpl create-from-image \
+  --image               ccr.ccs.tencentyun.com/ags-image/sandbox-browser:latest \
+  --writable-layer-size 1G \
+  --expose-port         9000 \
+  --probe               9000 \
+  --probe-path          /
+```
+
+Example output:
+
+```
+job_id:      0042cd3a-c1d6-45fd-8757-2595ba0027e8
+template_id: tpl-4ff5adc5eea44c14b1c8dbb3
+attempt_no:  1
+artifact_id:
+status:      PENDING
+phase:       PULLING
+progress:    0%
+```
+
+Save the `template_id` — you will use it to reference the template when creating sandboxes.
+
+### Multiple ports, custom probe path, and environment variables
+
+If your image exposes additional ports or needs environment variables set at boot time, add the relevant flags:
+
+```bash
+cubemastercli tpl create-from-image \
+  --image               ccr.ccs.tencentyun.com/ags-image/sandbox-code:latest \
+  --writable-layer-size 1G \
+  --expose-port         49999 \
+  --expose-port         49983 \
+  --probe               49999 \
+  --probe-path          /healthz \
+  --env                 MY_ENV=production
+```
+
+### Common flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--image` | Yes | OCI image reference (`registry/image:tag`) |
+| `--writable-layer-size` | Yes | Size of the writable overlay layer (e.g. `1G`) |
+| `--expose-port` | Yes | Port to expose; pass multiple times for multiple ports |
+| `--probe` | Yes | Port the platform probes for readiness |
+| `--probe-path` | No | HTTP path for the readiness probe (default `/`) |
+| `--env` | No | Environment variable in `KEY=VALUE` form; pass multiple times |
+| `--registry-username` | No | Username for private registry authentication |
+| `--registry-password` | No | Password for private registry authentication |
+| `--server` | No | CubeMaster address, overrides `CUBEMASTER_ADDR` |
+
+## Step 2 — Monitor progress
+
+### Watch (recommended)
+
+`tpl watch` polls the job until it reaches a terminal state (`READY` or `FAILED`), then exits:
+
+```bash
+cubemastercli tpl watch --job-id <job_id>
+```
+
+Example output when the job completes successfully:
+
+```
+job_id:                    2e71b561-153e-4c08-ac37-5270d94f5f15
+template_id:               tpl-748094d2f2374b0a8a37e6ec
+attempt_no:                1
+artifact_id:               rfs-1e8e07c90e9bb8eff94ecde2
+status:                    READY
+phase:                     READY
+progress:                  100%
+distribution:              1/1 ready, 0 failed
+template_spec_fingerprint: 1e8e07c90e9bb8eff94ecde20396002c411f6b812612a2a05086b85fe245b858
+artifact_status:           READY
+artifact_sha256:           5d413bc735062d49d36ef9c0e62cd0c3a915853be5ec0c7fba90e13d9fd33f79
+template_status:           READY
+```
+
+Key output fields:
+
+| Field | Description |
+|-------|-------------|
+| `status` / `template_status` | Overall state. `READY` means the template is usable for sandbox creation. |
+| `phase` | Current pipeline stage: `PULLING` → `BUILDING` → `DISTRIBUTING` → `READY`. |
+| `progress` | Percentage completion of the current phase. |
+| `distribution` | `N/M ready` — how many cluster nodes have the artifact. |
+| `artifact_id` | Stable ID of the built rootfs artifact. |
+| `artifact_sha256` | SHA-256 digest of the rootfs for integrity verification. |
+| `template_spec_fingerprint` | Deterministic fingerprint of the full template spec. The same image and flags always produce the same fingerprint. |
+
+### Single-shot status check
+
+If you prefer a non-blocking snapshot of the job state:
+
+```bash
+cubemastercli tpl status --job-id <job_id>
+```
+
+## Step 3 — Use the template
+
+Once `template_status: READY`, set the `CUBE_TEMPLATE_ID` environment variable and run your sandbox creation code:
+
+```bash
+export CUBE_TEMPLATE_ID=tpl-748094d2f2374b0a8a37e6ec
+python CubeAPI/examples/create.py
+```
+
+## Querying templates
+
+### List all templates
+
+```bash
+cubemastercli tpl list
+```
+
+Example output:
+
+```
+TEMPLATE_ID                  INSTANCE_TYPE   STATUS   CREATED_AT             IMAGE_INFO
+tpl-748094d2f2374b0a8a37e6ec cubebox         READY    2026-04-02T08:10:30Z   docker.io/library/nginx:latest@sha256:abcd...
+tpl-4ff5adc5eea44c14b1c8dbb3 cubebox         READY    2026-04-01T17:42:11Z   docker.io/library/python:3.11
+```
+
+`CREATED_AT` is in UTC RFC 3339 format. `IMAGE_INFO` shows the image reference and digest (`image@sha256:...`) when available.
+
+Use wide output to also see `VERSION` and `LAST_ERROR`:
+
+```bash
+cubemastercli tpl list -o wide
+```
+
+Use `--json` for scripting:
+
+```bash
+cubemastercli tpl list --json | jq '.data[].template_id'
+```
+
+### Inspect a single template
+
+<CodeGroup>
+
+```bash Human-readable output
+cubemastercli tpl info --template-id tpl-748094d2f2374b0a8a37e6ec
+```
+
+```bash JSON output
+cubemastercli tpl info --template-id tpl-748094d2f2374b0a8a37e6ec --json
+```
+
+```bash Include stored request body
+cubemastercli tpl info --template-id tpl-748094d2f2374b0a8a37e6ec --json --include-request
+```
+
+</CodeGroup>
+
+To preview the effective sandbox request that would result from using this template right now:
+
+```bash
+cubemastercli tpl render --template-id tpl-748094d2f2374b0a8a37e6ec --json
+```
+
+`tpl render` returns three layers: `api_request`, `merged_request`, and `cubelet_request`. Start with `merged_request` — it shows the fully resolved request after template fields have been applied. You can also pass a request override file with `-f req.json` to preview how your per-sandbox fields merge with the template.
+
+## Deleting a template
+
+```bash
+cubemastercli tpl delete --template-id tpl-748094d2f2374b0a8a37e6ec
+```
+
+On success:
+
+```
+template deleted: tpl-748094d2f2374b0a8a37e6ec
+```
+
+<Warning>
+Deletion removes the template metadata and all node-local artifact replicas. Sandboxes already running from this template are not affected, but no new sandboxes can be created from it after deletion.
+</Warning>
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `phase: PULLING` stuck for a long time | Image pull is slow or the registry is unreachable from cluster nodes | Check network and firewall rules; for private registries add `--registry-username` / `--registry-password` |
+| `status: FAILED` after `BUILDING` | Build error — disk full, incompatible filesystem, etc. | Run `tpl status --job-id <id> --json` and inspect `last_error` |
+| `distribution: 0/N ready` after `READY` | Artifact distribution is still in progress (normal for a brief period) | Wait and re-run `tpl info`; if stuck, check Cubelet logs on target nodes |
+| Template creation times out at probe | The container image does not run an HTTP server, or the probe port/path is wrong | Verify the image starts an HTTP server before signalling ready; check `--probe` and `--probe-path` match what the server actually serves; see [Bring your own image](/templates/bring-your-own-image) |

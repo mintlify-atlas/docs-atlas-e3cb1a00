@@ -1,0 +1,105 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "CubeSandbox",
+  "projectDescription": "A high-performance, hardware-isolated sandbox service built on RustVMM and KVM that provides sub-60ms cold starts, E2B SDK compatibility, and eBPF-based network security for AI agent code execution.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#DBEAFE",
+  "darkColor": "#1E3A8A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "dev-environment"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/single-node",
+              "deployment/multi-node",
+              "deployment/https-and-domain",
+              "deployment/authentication"
+            ]
+          },
+          {
+            "group": "Templates",
+            "pages": [
+              "templates/overview",
+              "templates/from-oci-image",
+              "templates/bring-your-own-image"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/connect-existing-cluster",
+              "guides/examples",
+              "guides/benchmarks"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/network"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/health",
+              "api/sandboxes",
+              "api/templates",
+              "api/cluster"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Sub-60ms cold start using resource pool pre-provisioning and snapshot cloning",
+    "Hardware-level isolation with dedicated OS kernel per sandbox (KVM MicroVMs)",
+    "E2B SDK drop-in compatibility — swap one environment variable to migrate",
+    "Ultra-low per-instance memory overhead (<5MB) enabling thousands of sandboxes per node",
+    "eBPF-based CubeVS for kernel-level network isolation and egress policy enforcement",
+    "Single-node and multi-node cluster deployment with one-click installer",
+    "Rust-built CubeAPI gateway with E2B-compatible REST interface",
+    "Sandbox pause/resume and state checkpoint support (snapshotting)"
+  ],
+  "publicApiSurface": [
+    "GET /cubeapi/v1/health",
+    "GET /cubeapi/v1/v2/sandboxes",
+    "GET /cubeapi/v1/sandboxes/{sandboxID}",
+    "DELETE /cubeapi/v1/sandboxes/{sandboxID}",
+    "POST /cubeapi/v1/sandboxes/{sandboxID}/pause",
+    "POST /cubeapi/v1/sandboxes/{sandboxID}/resume",
+    "GET /cubeapi/v1/v2/sandboxes/{sandboxID}/logs",
+    "GET /cubeapi/v1/templates",
+    "GET /cubeapi/v1/templates/{templateID}",
+    "GET /cubeapi/v1/cluster/overview",
+    "GET /cubeapi/v1/nodes",
+    "GET /cubeapi/v1/nodes/{nodeID}",
+    "cubemastercli tpl create-from-image",
+    "cubemastercli tpl watch",
+    "cubecli"
+  ]
+}

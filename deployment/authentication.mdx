@@ -1,0 +1,132 @@
+---
+title: "API Authentication Configuration for CubeSandbox"
+description: "Enable API authentication in CubeSandbox by pointing cube-api at your own auth callback service, which validates every incoming request via a simple HTTP POST."
+---
+
+By default, the Cube API Server allows all incoming requests without any authentication. To protect your deployment, you can point cube-api at an external auth callback service. When configured, cube-api extracts the credential from each request, forwards it to your service, and allows or rejects the request based on the HTTP response.
+
+## Enabling authentication
+
+Pass `--auth-callback-url` at startup, or set the equivalent environment variable:
+
+<Tabs>
+  <Tab title="CLI flag">
+    ```bash
+    ./cube-api --auth-callback-url https://your-auth-service/verify
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    export AUTH_CALLBACK_URL=https://your-auth-service/verify
+    ./cube-api
+    ```
+  </Tab>
+  <Tab title=".env file">
+    ```bash
+    AUTH_CALLBACK_URL=https://your-auth-service/verify
+    ```
+  </Tab>
+</Tabs>
+
+When `AUTH_CALLBACK_URL` is not set (the default), all requests are allowed without any credential check.
+
+## How it works
+
+When a request arrives, cube-api follows this flow:
+
+1. Extracts the credential from the request header (`Authorization: Bearer` takes priority over `X-API-Key`).
+2. Sends a `POST` request to the callback URL with the credential header and the original request path.
+3. If the callback returns **HTTP 200**, the request is allowed through.
+4. Any other status code causes the request to be rejected with **HTTP 401 Unauthorized**.
+
+```
+Client ──→ Cube API Server
+                │
+                ├─ extract credential (Bearer / API Key)
+                │
+                └─ POST → your auth service
+                                │
+                       200 ─────┤──→ allow request
+                    non-200 ────┘──→ 401 Unauthorized
+```
+
+## Sending credentials from the E2B SDK
+
+The E2B SDK sends the value of `E2B_API_KEY` as `Authorization: Bearer <key>` on every request:
+
+```bash
+export E2B_API_KEY=your-actual-api-key
+```
+
+If you are not using the E2B SDK, you can send `X-API-Key` directly:
+
+```
+X-API-Key: your-actual-api-key
+```
+
+Both formats are accepted. `Authorization: Bearer` takes priority when both headers are present.
+
+## Callback request format
+
+cube-api sends a `POST` to your callback URL with the following headers:
+
+| Header | Value |
+|---|---|
+| `Authorization` | `Bearer <token>` — present when the client used Bearer authentication |
+| `X-API-Key` | `<key>` — present when the client used API Key authentication |
+| `X-Request-Path` | The original request path, e.g. `/v1/sandboxes` |
+
+The two credential headers are mutually exclusive. Your callback receives whichever one the client sent.
+
+### Example callback implementation
+
+The following Python/FastAPI example accepts both Bearer tokens and API keys:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
+
+app = FastAPI()
+
+VALID_KEYS = {"secret-key-1", "secret-key-2"}
+
+@app.post("/verify")
+async def verify(request: Request):
+    # Bearer token
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth.removeprefix("Bearer ").strip()
+        if token in VALID_KEYS:
+            return {}           # 200 → allow
+        return Response(status_code=403)
+
+    # API Key
+    key = request.headers.get("X-API-Key", "")
+    if key in VALID_KEYS:
+        return {}               # 200 → allow
+
+    return Response(status_code=401)
+```
+
+<Tip>
+Your callback can use any logic you need — database lookups, token introspection, RBAC checks — as long as it returns HTTP 200 to allow and a non-200 status to deny.
+</Tip>
+
+## Error responses
+
+| Scenario | HTTP status |
+|---|---|
+| No credential provided | `401 Unauthorized` |
+| Callback returned non-200 | `401 Unauthorized` |
+| Callback unreachable | `500 Internal Server Error` |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Single-node deployment" icon="server" href="/deployment/single-node">
+    Review deployment configuration options, including the `AUTH_CALLBACK_URL` variable in `.env`.
+  </Card>
+  <Card title="HTTPS and domain" icon="lock" href="/deployment/https-and-domain">
+    Secure the connection between clients and CubeProxy with TLS.
+  </Card>
+</CardGroup>

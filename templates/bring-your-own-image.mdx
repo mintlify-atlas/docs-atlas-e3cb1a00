@@ -1,0 +1,188 @@
+---
+title: 'Bring Your Own Docker Image to CubeSandbox Templates'
+description: 'How to prepare a custom Docker image with the envd daemon so it passes the CubeSandbox readiness probe and can be registered as a template.'
+---
+
+Every CubeSandbox template must include `envd` — a small daemon that listens on port 49983 and acts as the protocol endpoint between your sandbox and the Cube platform. This page explains why `envd` is required and shows you two ways to add it to any Docker image.
+
+## Why every image needs `envd`
+
+All communication between CubeMaster, the Cube SDKs, and a running sandbox goes through `envd`. There is no alternative transport:
+
+| Cube capability | Endpoint inside the sandbox | Without `envd` |
+|-----------------|----------------------------|----------------|
+| Template readiness probe | `GET :49983/health` → 204 | Template creation fails the probe |
+| `Sandbox.commands.run()` | `POST :49983/process` | Every SDK command returns 404 |
+| `Sandbox.files.read/write()` | `POST :49983/files` | File APIs are unusable |
+| Sandbox init (env vars, time sync) | `POST :49983/init` | Sandbox never reaches Ready |
+
+Any image you want to use as a Cube template must have `envd` listening on `:49983` at startup. The easiest way to satisfy that requirement is to build `FROM` the official `cubesandbox-base` image.
+
+## Option A: build on top of `cubesandbox-base` (recommended)
+
+`cubesandbox-base` is an `ubuntu:22.04` image with `envd` preinstalled at `/usr/bin/envd` and a generic `cube-entrypoint.sh` that starts `envd` in the background before handing control to your `CMD`. You only need to add your own tooling.
+
+<Steps>
+  <Step title="Write a Dockerfile">
+    Install your packages on top of the base image. `envd` and the entrypoint are already present — you do not need to configure them.
+
+    ```dockerfile
+    FROM ghcr.io/tencentcloud/cubesandbox-base:2026.16
+
+    # Install your own tooling
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends python3 python3-pip \
+        && rm -rf /var/lib/apt/lists/*
+
+    RUN pip install --no-cache-dir pandas matplotlib numpy
+
+    # Optional: if your app needs to be the foreground process, set CMD here.
+    # envd stays alive in the background.
+    # CMD ["python3", "/srv/app.py"]
+    ```
+  </Step>
+  <Step title="Build and push">
+    The registry must be reachable from your Cube cluster nodes.
+
+    ```bash
+    docker build -t my-registry.example.com/my-team/my-sandbox:v1 .
+    docker push   my-registry.example.com/my-team/my-sandbox:v1
+    ```
+  </Step>
+  <Step title="Create a Cube template">
+    Expose port 49983 (envd) plus any additional ports your application uses. Probe against 49983 so the platform waits for envd to be ready.
+
+    ```bash
+    cubemastercli tpl create-from-image \
+      --image               my-registry.example.com/my-team/my-sandbox:v1 \
+      --writable-layer-size 1G \
+      --expose-port         49983 \
+      --expose-port         <your-custom-port> \
+      --probe               49983 \
+      --probe-path          /health
+    ```
+  </Step>
+</Steps>
+
+### Available base image tags
+
+Pin the exact `envd` version for reproducible builds.
+
+| Tag | Base OS | envd version |
+|-----|---------|-------------|
+| `2026.16` / `latest` | `ubuntu:22.04` | `2026.16` |
+| `2026.16-ubuntu22.04` | `ubuntu:22.04` | `2026.16` |
+
+<Tip>
+A runnable end-to-end example is available in the repository at [`examples/cubesandbox-base-nginx`](https://github.com/TencentCloud/CubeSandbox/tree/master/examples/cubesandbox-base-nginx) — a minimal demo that stacks nginx on top of `cubesandbox-base`.
+</Tip>
+
+## Option B: inject `envd` into an existing image
+
+When you have an existing image you cannot easily replace as the base, copy `envd` and `cube-entrypoint.sh` directly out of `cubesandbox-base` using a multi-stage `COPY --from=` instruction.
+
+### Example: wrapping an existing interpreter image
+
+```dockerfile
+FROM e2bdev/code-interpreter:latest
+
+USER root
+
+# Pull envd and the generic entrypoint from cubesandbox-base.
+COPY --from=ghcr.io/tencentcloud/cubesandbox-base:2026.16 \
+     /usr/bin/envd /usr/bin/envd
+COPY --from=ghcr.io/tencentcloud/cubesandbox-base:2026.16 \
+     /usr/local/bin/cube-entrypoint.sh /usr/local/bin/cube-entrypoint.sh
+
+# Wrap the upstream entrypoint with cube-entrypoint.sh so envd starts first.
+ENTRYPOINT ["/usr/local/bin/cube-entrypoint.sh"]
+CMD ["/bin/sh", "-c", "sudo --preserve-env=E2B_LOCAL /root/.jupyter/start-up.sh"]
+```
+
+### Example: slim Python image with a FastAPI app
+
+```dockerfile
+FROM python:3.11-slim
+
+COPY --from=ghcr.io/tencentcloud/cubesandbox-base:2026.16 \
+     /usr/bin/envd /usr/bin/envd
+COPY --from=ghcr.io/tencentcloud/cubesandbox-base:2026.16 \
+     /usr/local/bin/cube-entrypoint.sh /usr/local/bin/cube-entrypoint.sh
+
+RUN pip install --no-cache-dir fastapi uvicorn
+
+COPY app.py /srv/app.py
+
+EXPOSE 49983 8000
+ENTRYPOINT ["/usr/local/bin/cube-entrypoint.sh"]
+CMD ["uvicorn", "app:app", "--app-dir", "/srv", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Build, push, and template creation are identical to Option A steps 2 and 3.
+
+## How `cube-entrypoint.sh` works
+
+`cube-entrypoint.sh` implements a simple "envd in the background, your app in the foreground" pattern:
+
+1. It always starts `envd -port "${ENVD_PORT:-49983}"` in the background so `/health` is reachable within about a second of container startup.
+2. If the container was started **with** a user `CMD`, the script `exec`s that command. `envd` keeps running in the background; your process owns `stdout`/`stderr` and receives `SIGTERM` on stop.
+3. If the container was started **without** a `CMD`, the script waits on `envd`, keeping it as the foreground process.
+
+### Entrypoint environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ENVD_PORT` | `49983` | Port `envd` listens on. |
+| `ENVD_EXTRA_ARGS` | *(empty)* | Extra flags passed after `-port`. |
+| `ENVD_LOG_FILE` | `/var/log/envd.log` | File that captures envd stdout/stderr. Use `-` to inherit container stdio. |
+| `ENVD_BIN` | `/usr/bin/envd` | Override if you install `envd` at a different path. |
+
+### Starting `envd` manually
+
+If you have a non-trivial entrypoint of your own and do not want to delegate to `cube-entrypoint.sh`, add one line to start `envd` in the background before handing control to your main process:
+
+```bash
+#!/bin/bash
+# your-entrypoint.sh
+
+# Start envd in the background.
+/usr/bin/envd -port 49983 >/var/log/envd.log 2>&1 &
+
+# ... your usual startup sequence ...
+exec "$@"
+```
+
+## Verify the image locally
+
+Before submitting a template build job, run a quick smoke test against the image to confirm `envd` starts and the `/health` endpoint responds:
+
+```bash
+IMG=my-registry.example.com/my-team/my-sandbox:v1
+cid=$(docker run -d --rm "$IMG")
+
+docker exec "$cid" curl -s -o /dev/null -w "envd /health => %{http_code}\n" \
+    http://127.0.0.1:49983/health
+# => envd /health => 204
+
+docker exec "$cid" /usr/bin/envd -version
+# => 2026.16
+
+docker rm -f "$cid"
+```
+
+If `/health` does not return 204 within a few seconds, inspect the envd log inside the container:
+
+```bash
+docker exec "$cid" cat /var/log/envd.log
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Template creation fails the readiness probe | `envd` did not start, or started on the wrong port | Ensure `ENTRYPOINT` invokes `cube-entrypoint.sh`, or that your own script runs `/usr/bin/envd -port 49983 &` before `exec`. |
+| `curl :49983/health` returns `000` | Nothing is listening; entrypoint was replaced | Check `docker inspect --format '{{json .Config.Entrypoint}}'`; keep `cube-entrypoint.sh` as the wrapper. |
+| `envd` exits immediately | Version mismatch between binary and runtime expectations | Verify with `docker exec ... /usr/bin/envd -version`; re-copy from the pinned base tag. |
+| Port 49983 conflicts with your own service | Your application also listens on 49983 | Move your app to a different port and expose both with `--expose-port`. |
+| `sudo: command not found` in your CMD | You started `FROM` a `-slim` or `-alpine` image that does not include sudo | Either `apt-get install -y sudo`, or remove `sudo` from your entrypoint — `cube-entrypoint.sh` does not require it. |
+| Template creation times out in `PULLING` | Registry unreachable from Cube nodes | Push to a registry the cluster can reach, or supply `--registry-username` / `--registry-password`. |

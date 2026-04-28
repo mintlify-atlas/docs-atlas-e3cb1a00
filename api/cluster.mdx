@@ -1,0 +1,285 @@
+---
+title: "Cluster & Nodes API — Capacity, Nodes, and Health"
+description: "Retrieve cluster-wide CPU and memory capacity, list all nodes, and inspect per-node resource utilisation and health conditions via the CubeSandbox API."
+---
+
+The Cluster and Nodes endpoints provide read-only observability into the CubeSandbox cluster. Use the cluster overview for a quick capacity snapshot — total and allocatable CPU and memory across all nodes — and the nodes endpoints for per-node resource utilisation, health conditions, and local template inventory.
+
+---
+
+## Get cluster overview
+
+Returns aggregated capacity and health metrics for the entire cluster.
+
+```
+GET /cubeapi/v1/cluster/overview
+```
+
+### Response
+
+**HTTP 200** — A `ClusterOverview` object.
+
+<ResponseField name="nodeCount" type="integer" required>
+  Total number of nodes registered in the cluster.
+</ResponseField>
+
+<ResponseField name="healthyNodes" type="integer" required>
+  Number of nodes currently reporting a healthy status.
+</ResponseField>
+
+<ResponseField name="totalCpuMilli" type="integer (int64)" required>
+  Total CPU capacity across all nodes, expressed in millicpu (1000 millicpu = 1 vCPU).
+</ResponseField>
+
+<ResponseField name="allocatableCpuMilli" type="integer (int64)" required>
+  CPU currently available for new sandbox allocation, expressed in millicpu.
+</ResponseField>
+
+<ResponseField name="totalMemoryMB" type="integer (int64)" required>
+  Total memory capacity across all nodes in MiB.
+</ResponseField>
+
+<ResponseField name="allocatableMemoryMB" type="integer (int64)" required>
+  Memory currently available for new sandbox allocation in MiB.
+</ResponseField>
+
+<ResponseField name="maxMvmSlots" type="integer (int64)" required>
+  Sum of every node's maximum MicroVM slots. Represents the upper bound on the number of sandboxes that can run simultaneously across the cluster.
+</ResponseField>
+
+**HTTP 404** — Cluster endpoint unavailable (CubeMaster unreachable).
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/cluster/overview
+```
+
+```bash curl (with auth)
+curl -H "Authorization: Bearer your-token" \
+  http://localhost:3000/cubeapi/v1/cluster/overview
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+{
+  "nodeCount": 3,
+  "healthyNodes": 3,
+  "totalCpuMilli": 96000,
+  "allocatableCpuMilli": 72000,
+  "totalMemoryMB": 196608,
+  "allocatableMemoryMB": 147456,
+  "maxMvmSlots": 600
+}
+```
+
+---
+
+## List nodes
+
+Returns a list of all nodes in the cluster with their resource and health state.
+
+```
+GET /cubeapi/v1/nodes
+```
+
+### Response
+
+**HTTP 200** — Array of `NodeView` objects. See [Get node detail](#get-node-detail) for the full field reference.
+
+**HTTP 404** — Node inventory unavailable (CubeMaster unreachable).
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/nodes
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+[
+  {
+    "nodeID": "node-1",
+    "hostIP": "10.0.0.1",
+    "healthy": true,
+    "capacity": { "cpuMilli": 32000, "memoryMB": 65536 },
+    "allocatable": { "cpuMilli": 24000, "memoryMB": 49152 },
+    "cpuSaturation": 25.0,
+    "memorySaturation": 25.0,
+    "maxMvmSlots": 200,
+    "instanceType": "standard",
+    "localTemplates": ["tmpl-base"],
+    "conditions": [],
+    "heartbeatTime": "2026-04-28T10:30:00Z"
+  }
+]
+```
+
+---
+
+## Get node detail
+
+Returns the full detail record for a single cluster node.
+
+```
+GET /cubeapi/v1/nodes/{nodeID}
+```
+
+### Path parameters
+
+<ParamField path="nodeID" type="string" required>
+  The unique identifier of the node to retrieve.
+</ParamField>
+
+### Response
+
+**HTTP 200** — A `NodeView` object.
+
+<ResponseField name="nodeID" type="string" required>
+  Unique identifier for this node.
+</ResponseField>
+
+<ResponseField name="hostIP" type="string" required>
+  IP address of the host machine.
+</ResponseField>
+
+<ResponseField name="healthy" type="boolean" required>
+  Whether this node is currently considered healthy by CubeMaster.
+</ResponseField>
+
+<ResponseField name="capacity" type="object" required>
+  Total physical resource capacity of this node.
+
+  <Expandable title="NodeResourcesView fields">
+    <ResponseField name="cpuMilli" type="integer (int64)" required>
+      CPU capacity in millicpu (1000 = 1 vCPU).
+    </ResponseField>
+    <ResponseField name="memoryMB" type="integer (int64)" required>
+      Memory capacity in MiB.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="allocatable" type="object" required>
+  Resources currently available for sandbox scheduling on this node.
+
+  <Expandable title="NodeResourcesView fields">
+    <ResponseField name="cpuMilli" type="integer (int64)" required>
+      Allocatable CPU in millicpu.
+    </ResponseField>
+    <ResponseField name="memoryMB" type="integer (int64)" required>
+      Allocatable memory in MiB.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="cpuSaturation" type="number (float)" required>
+  Percentage (0–100) of this node's CPU currently in use.
+</ResponseField>
+
+<ResponseField name="memorySaturation" type="number (float)" required>
+  Percentage (0–100) of this node's memory currently in use.
+</ResponseField>
+
+<ResponseField name="maxMvmSlots" type="integer (int64)" required>
+  Maximum number of MicroVM slots available on this node.
+</ResponseField>
+
+<ResponseField name="instanceType" type="string | null">
+  Instance type label for this node (for example, a hardware tier or machine family).
+</ResponseField>
+
+<ResponseField name="localTemplates" type="array | null">
+  List of template IDs whose images are pre-cached on this node. Sandboxes created from these templates can start without pulling the image over the network.
+</ResponseField>
+
+<ResponseField name="heartbeatTime" type="string (datetime) | null">
+  ISO 8601 timestamp of the most recent heartbeat received from this node.
+</ResponseField>
+
+<ResponseField name="conditions" type="array | null">
+  List of health conditions reported by this node.
+
+  <Expandable title="NodeConditionView fields">
+    <ResponseField name="type" type="string" required>
+      Condition type identifier (for example, `Ready`, `DiskPressure`).
+    </ResponseField>
+    <ResponseField name="status" type="string" required>
+      Condition status string (for example, `True`, `False`, `Unknown`).
+    </ResponseField>
+    <ResponseField name="reason" type="string">
+      Machine-readable reason for the current condition status.
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Human-readable description of the condition.
+    </ResponseField>
+    <ResponseField name="lastHeartbeatTime" type="string (datetime) | null">
+      ISO 8601 timestamp of the last time this condition was observed.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**HTTP 404** — Node not found.
+
+**HTTP 500** — Unexpected backend error.
+
+### Example request
+
+<CodeGroup>
+
+```bash curl
+curl http://localhost:3000/cubeapi/v1/nodes/node-1
+```
+
+</CodeGroup>
+
+### Example response
+
+```json
+{
+  "nodeID": "node-1",
+  "hostIP": "10.0.0.1",
+  "healthy": true,
+  "capacity": {
+    "cpuMilli": 32000,
+    "memoryMB": 65536
+  },
+  "allocatable": {
+    "cpuMilli": 24000,
+    "memoryMB": 49152
+  },
+  "cpuSaturation": 25.0,
+  "memorySaturation": 25.0,
+  "maxMvmSlots": 200,
+  "instanceType": "standard",
+  "localTemplates": ["tmpl-base", "tmpl-browser"],
+  "heartbeatTime": "2026-04-28T10:30:00Z",
+  "conditions": [
+    {
+      "type": "Ready",
+      "status": "True",
+      "reason": "KubeletReady",
+      "message": "cubelet is posting ready status",
+      "lastHeartbeatTime": "2026-04-28T10:30:00Z"
+    }
+  ]
+}
+```
+
+<Note>
+  CPU saturation is computed from `(capacity.cpuMilli - allocatable.cpuMilli) / capacity.cpuMilli * 100`. A node with high `cpuSaturation` but low `memorySaturation` may still accept memory-heavy workloads.
+</Note>

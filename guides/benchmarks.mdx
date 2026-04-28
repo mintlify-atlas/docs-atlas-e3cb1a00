@@ -1,0 +1,72 @@
+---
+title: 'CubeSandbox Performance Benchmarks and Comparisons'
+description: 'Measured cold start latency, memory overhead, and deployment density benchmarks comparing CubeSandbox against Docker containers and traditional VMs.'
+---
+
+CubeSandbox is designed around one core constraint for AI agent workloads: sandboxes must be cheap enough to spin up per request and dense enough to run thousands concurrently on a single node. The benchmarks on this page cover cold start latency, memory overhead per instance, and a side-by-side comparison with Docker containers and traditional VMs to show where each approach sits on the isolation/performance tradeoff curve.
+
+## Comparison: Docker vs. traditional VM vs. CubeSandbox
+
+| Metric | Docker container | Traditional VM | CubeSandbox |
+|---|---|---|---|
+| **Isolation level** | Low (shared kernel namespaces) | High (dedicated kernel) | **Extreme (dedicated kernel + eBPF)** |
+| **Boot speed** | ~200 ms | Seconds | **Sub-millisecond — under 60 ms end-to-end** |
+| **Memory overhead** | Low (shared kernel) | High (full OS) | **Ultra-low — under 5 MB per instance** |
+| **Deployment density** | High | Low | **Extreme — thousands per node** |
+| **E2B SDK compatible** | No | No | **Yes — drop-in replacement** |
+
+<Note>
+  Boot speed is measured end-to-end from sandbox creation request to a fully serviceable sandbox ready to execute code. Traditional VM boot times vary widely; "seconds" reflects a typical minimal Linux guest.
+</Note>
+
+## Cold start latency
+
+CubeSandbox cold start is benchmarked on bare-metal hardware. The measured results are:
+
+| Concurrency | Metric | Value |
+|---|---|---|
+| 1 | End-to-end cold start | **< 60 ms** |
+| 50 | Average | **67 ms** |
+| 50 | P95 | **90 ms** |
+| 50 | P99 | **137 ms** |
+
+All measurements remain below 150 ms even at 50 concurrent sandbox creations. The distribution is tight: the P99 at 50 concurrency (137 ms) is only ~2× the single-concurrency baseline (< 60 ms), showing that the resource pool scales gracefully under concurrent load rather than degrading linearly.
+
+<Tip>
+  For AI agent workloads where the LLM inference step typically takes hundreds of milliseconds to seconds, a sub-150 ms sandbox boot means the sandbox is ready before the agent's first tool call completes. The sandbox itself is not the bottleneck.
+</Tip>
+
+## Memory overhead
+
+Memory overhead is measured as the base footprint added per sandbox instance on top of the guest workload memory. Across various instance sizes with sandbox specifications up to 32 GB:
+
+- **Base overhead: under 5 MB per instance**
+- Overhead scales only marginally as instance size increases — it does not grow proportionally with the amount of memory allocated to the guest
+
+This is achieved through two mechanisms: snapshot cloning with copy-on-write (CoW) so memory pages are shared until written, and a Rust-based runtime that has been aggressively trimmed to remove everything not required for sandbox operation.
+
+<Note>
+  Benchmark conditions: measurements taken on bare-metal servers with sandbox specifications at or below 32 GB. Configurations beyond 32 GB may see a marginal increase in base overhead.
+</Note>
+
+### What under 5 MB overhead enables
+
+With 5 MB overhead per instance, a node with 32 GB available for sandbox overhead alone can host over 6,000 concurrent sandboxes. In practice, the constraint is the aggregate memory used by the workloads running inside the sandboxes, not the sandbox infrastructure itself. This matches the "thousands of agents per node" density target.
+
+## Why these numbers matter for AI agent workloads
+
+**Cost per agent run.** AI agent pipelines often spin up a fresh sandbox for each task or session. At < 60 ms cold start and < 5 MB overhead, the sandbox lifecycle cost is negligible compared to LLM inference cost. With Docker-level density but VM-level isolation, you avoid paying the traditional VM tax of hundreds of megabytes of per-instance overhead.
+
+**Concurrency at scale.** An agent orchestration layer that fans out to 50 parallel sandbox executions (for example, running SWE-bench evaluations, parallel data analysis tasks, or multi-agent exploration) sees P99 latency of 137 ms — still sub-150 ms. The system does not need warm pools or pre-allocation at the application layer to stay responsive.
+
+**True isolation without shared-kernel risk.** Docker containers share the host kernel. A container escape or kernel exploit affects all workloads on the node. Each CubeSandbox instance has its own dedicated Guest OS kernel, so any kernel-level exploit in LLM-generated code is contained to that single MicroVM. The eBPF-based CubeVS network layer adds fine-grained inter-sandbox traffic isolation on top of that.
+
+## What enables these numbers
+
+Three architectural decisions drive the performance characteristics:
+
+**Resource pool pre-provisioning.** CubeSandbox maintains a pool of pre-booted MicroVM snapshots. A `Sandbox.create()` call clones from the pool rather than booting a full VM from scratch. The time-consuming kernel and OS initialization is done once at template build time, not at request time.
+
+**Snapshot cloning with copy-on-write.** Each sandbox starts from a CoW clone of the template snapshot. Memory pages are shared across instances until they are written. This is what makes both the sub-5 MB overhead and thousands-per-node density possible — the shared read-only baseline does not count against each instance's overhead.
+
+**Aggressively trimmed Rust runtime.** The CubeHypervisor and supporting components are built in Rust with the runtime stripped to only what is needed for MicroVM management. There is no general-purpose OS running alongside the guest — the host-side footprint per sandbox is minimal.
